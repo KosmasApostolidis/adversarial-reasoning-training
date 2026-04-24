@@ -1,0 +1,17 @@
+# Full fine-tune freeze + memory configuration.
+#
+# strategy = "none" means everything trainable: ViT + projector + LM.
+# Memory plan assumes bnb 8-bit AdamW + grad_ckpt for both LM and ViT
+# stacks. On a 141 GB H200 the peak should sit near 62 GB with adv
+# doubled forward; tighter freeze strategies are available if a
+# specific run needs more headroom.
+
+freeze_strategy: none       # none | vit_only | projector_only | lm_only
+modules_to_save: all
+
+memory:
+  grad_checkpoint_lm: true
+  grad_checkpoint_vit: true
+  flash_attn: true                          # Qwen2.5-VL: confirmed; LLaVA: phase 2 audit
+  peak_memory_limit_gb: 120.0               # T0 hard ceiling
+  fall_back_to_zero1: false                 # flip if T0 reports OOM

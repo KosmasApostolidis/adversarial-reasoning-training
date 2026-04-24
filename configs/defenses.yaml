@@ -1,0 +1,29 @@
+# Inner attack + defense hyperparameters.
+#
+# Curriculum: ramp epsilon across epochs so optimization can find a
+# stable minimum at small budgets before being asked to be robust at
+# 8/255. Inspired by OAAT (Sehwag 2022) and Madry's curriculum
+# observations.
+
+pgd:
+  eps_schedule:
+    - {epoch_range: [1, 2], eps: 0.0078}    # 2/255
+    - {epoch_range: [3, 3], eps: 0.0157}    # 4/255
+    - {epoch_range: [4, 5], eps: 0.0314}    # 8/255
+  default_eps: 0.0157                       # 4/255 fallback
+  alpha_ratio: 0.25                         # alpha = eps * ratio
+  steps: 7
+  refresh_K: 1                              # re-craft adv every K outer steps
+  eval_eps: [0.0157, 0.0314]                # 4/255, 8/255 for T3
+  eval_steps: 40
+
+trades:
+  beta_start: 6.0
+  beta_end: 3.0                             # linearly anneal across epochs
+  temperature: 2.0                          # T for KL softmax(logits/T)
+
+pgd_at:
+  # no extra knobs
+
+oaat:
+  alpha: 0.5                                # weight on clean term

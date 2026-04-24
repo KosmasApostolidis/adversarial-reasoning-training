@@ -1,0 +1,38 @@
+# 5-step smoke test. CI-style gate: must complete in <3 min on H200,
+# loss must be finite, checkpoint must be written. Used by
+# scripts/train.py with --config flag override.
+
+defense: trades
+seed: 0
+
+epochs: 1
+micro_batch: 1
+grad_accum: 1               # effective batch = 1 for fast smoke
+
+optim: adamw                # plain AdamW for smoke (no bnb dep)
+lr:
+  lm: 5.0e-6
+  projector: 1.0e-5
+  vit: 1.0e-6
+weight_decay: 0.0
+betas: [0.9, 0.999]
+
+schedule: constant
+warmup_pct: 0.0
+
+grad_ckpt: false
+amp: bf16
+grad_clip_norm: 1.0
+
+log_every: 1
+eval_every: 0               # disable periodic eval for smoke
+ckpt_keep: 1
+
+metric_for_best: tool_name_acc
+
+# Hard cap on training samples for smoke (interpreted by train.py)
+smoke_max_samples: 5
+smoke_max_steps: 5
+
+# Synthetic data mode for smoke — no real Pats/ images required
+synthetic: true

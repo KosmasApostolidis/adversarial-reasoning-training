@@ -1,0 +1,18 @@
+# Gold-trajectory cache configuration.
+#
+# Bumping oracle_version invalidates all cache keys (gold_cache_key
+# hashes the version into the filename), forcing a re-generate.
+
+oracle_version: v1
+cache_dir: data/gold
+
+expert_probe: data/gold/expert_probe.jsonl
+expert_probe_min_acc: 0.85   # T1 must clear this on the held-out probe set
+
+templates:
+  enabled:
+    - pirads_1_2
+    - pirads_3
+    - pirads_4
+    - pirads_5
+    - post_treatment

@@ -1,0 +1,26 @@
+# Data + dataset wiring.
+#
+# Dataset reuses the attacks-repo TaskSample loader but wraps each
+# sample with a teacher-forced gold trajectory pulled from the cache
+# populated by scripts/make_gold_trajectories.py.
+
+task_id: prostate_mri_workup
+config_path: ../adversarial-reasoning-attacks/configs/tasks.yaml
+train_split: train
+dev_split: dev
+test_split: test
+
+# Synthetic mode: drives sample iteration off attacks-repo synthetic generator.
+# Set false once real Pats/ data is restored.
+synthetic: true
+n_train: null               # null = full split
+n_dev: 16                   # cap dev for fast eval
+
+# Optional metadata file used by make_gold_trajectories.py.
+# Empty / missing → metadata_lookup = {} (oracle uses defaults).
+metadata_csv: null
+
+# Loader knobs
+num_workers: 0              # B=1 only; multiprocessing not worth the overhead
+shuffle: true
+pin_memory: true

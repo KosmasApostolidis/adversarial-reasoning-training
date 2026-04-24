@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "adversarial-reasoning-training: robust fine-tuning of VLM medical agents against pixel-space reasoning attacks"
+authors:
+  - family-names: "Apostolidis"
+    given-names: "Kosmas"
+    email: "cosmasapostolidis@gmail.com"
+version: "0.1.0"
+date-released: "2026-04-25"
+license: MIT
+repository-code: "https://github.com/KosmasApostolidis/adversarial-reasoning-training"
+keywords:
+  - adversarial-training
+  - vision-language-models
+  - medical-imaging
+  - agentic-ai
+  - trades
+  - pgd
+  - prostate-mri

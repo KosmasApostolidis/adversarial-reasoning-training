@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local HF cache (symlink target, never committed)
+.hf_cache/
+.hf_cache
+
+# Training artifacts
+runs/
+checkpoints/
+*.ckpt
+*.pt
+*.safetensors
+*.bin
+
+# Dataset / gold trajectory cache
+data/gold/*.json
+data/gold/*.jsonl
+!data/gold/expert_probe.jsonl.example
+data/prostatex/
+data/prostatex_bhi/
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
