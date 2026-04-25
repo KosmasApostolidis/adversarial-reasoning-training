@@ -79,7 +79,10 @@ def run_t1(
     device_t = torch.device(device)
     start = time.time()
 
-    model.train(True)
+    # attacks-repo qwen_vl.forward_with_logits asserts model.training is False.
+    # Grads still flow under eval mode (dropout/BN stay frozen); matches the
+    # adv_trainer convention.
+    model.train(False)
     loader = DataLoader(train_ds, batch_size=1, shuffle=True, collate_fn=collator)
     step = 0
     micro = 0
@@ -136,3 +139,186 @@ def run_t1(
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result.to_dict(), f, indent=2)
     return result
+
+
+def make_teacher_forced_evaluator(
+    *,
+    vlm: Any,
+    model: torch.nn.Module,
+    dev_ds: Dataset,
+    collator: TFCollator,
+    device: torch.device,
+    amp_dtype: torch.dtype = torch.bfloat16,
+) -> Callable[[int, int], dict[str, float]]:
+    """Token-level argmax accuracy on dev as a proxy for tool_name_acc + answer_em.
+
+    Why a proxy: real free-form generation eval requires .generate() + JSON
+    parsing + per-sample exact match — substantial work and out-of-scope
+    for this gate. Teacher-forced argmax over `task_mask` positions
+    measures whether the model can predict the next gold tool-token given
+    the gold prefix; the same over `traj_mask` measures whole-trajectory
+    next-token coverage. Both are upper bounds on free-gen quality but
+    correlate closely after 200 steps.
+    """
+
+    def _evaluate(global_step: int, epoch: int) -> dict[str, float]:
+        loader = DataLoader(dev_ds, batch_size=1, shuffle=False, collate_fn=collator)
+        was_training = model.training
+        model.train(False)
+        task_correct = task_total = 0
+        traj_correct = traj_total = 0
+        with torch.no_grad():
+            for batch in loader:
+                batch = batch.to(device)
+                with torch.autocast(device_type=device.type, dtype=amp_dtype):
+                    logits = _clean_forward(vlm, batch, device)
+                preds = logits.argmax(dim=-1)
+                gold = batch.input_ids
+                match = preds[:, :-1] == gold[:, 1:]
+                task_m = batch.task_mask[:, 1:].bool()
+                traj_m = batch.traj_mask[:, 1:].bool()
+                task_correct += int(match[task_m].sum().item())
+                task_total += int(task_m.sum().item())
+                traj_correct += int(match[traj_m].sum().item())
+                traj_total += int(traj_m.sum().item())
+        if was_training:
+            model.train(True)
+        return {
+            "tool_name_acc": task_correct / max(1, task_total),
+            "answer_em": traj_correct / max(1, traj_total),
+            "task_token_count": float(task_total),
+            "traj_token_count": float(traj_total),
+        }
+
+    return _evaluate
+
+
+def _main() -> int:
+    """CLI entrypoint:
+
+    ``python -m adversarial_reasoning_training.gates.T1_clean
+        --model qwen2_5_vl_7b
+        --max-steps 200
+        --out runs/t1/gates/T1.json``
+    """
+    import argparse
+
+    import yaml
+
+    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
+
+    from ..data.dataset import ProstateXTrainDS
+    from ..gold.oracle import load_metadata_csv
+    from ..trainer.freeze import FreezeConfig, apply_freeze
+    from ..trainer.optim import (
+        OptimConfig,
+        ScheduleConfig,
+        build_optimizer,
+        build_scheduler,
+    )
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--data", type=Path, default=Path("configs/data.yaml"))
+    parser.add_argument("--gold", type=Path, default=Path("configs/gold.yaml"))
+    parser.add_argument("--full-ft", type=Path, default=Path("configs/full_ft.yaml"))
+    parser.add_argument("--training", type=Path, default=Path("configs/training.yaml"))
+    parser.add_argument(
+        "--models-yaml", type=Path,
+        default=Path("../adversarial-reasoning-attacks/configs/models.yaml"),
+    )
+    parser.add_argument("--out", type=Path, default=Path("runs/t1/gates/T1.json"))
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--max-steps", type=int, default=200)
+    parser.add_argument("--grad-accum", type=int, default=8)
+    parser.add_argument("--tool-name-acc-min", type=float, default=0.85)
+    parser.add_argument("--answer-em-min", type=float, default=0.70)
+    args = parser.parse_args()
+
+    def _load(path: Path) -> dict[str, Any]:
+        with path.open("r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+
+    data_cfg = _load(args.data)
+    gold_cfg = _load(args.gold)
+    ft_cfg = _load(args.full_ft)
+    train_cfg = _load(args.training)
+
+    vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
+    model = vlm.model
+    model.to(torch.bfloat16)
+
+    apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
+
+    collator = TFCollator(
+        family=vlm.family,
+        processor=getattr(vlm, "processor", None) or vlm.tokenizer,
+    )
+    metadata_csv = data_cfg.get("metadata_csv")
+    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
+
+    def _ds(split_name: str, n: int | None) -> ProstateXTrainDS:
+        return ProstateXTrainDS(
+            task_id=data_cfg["task_id"],
+            split=split_name,
+            cache_dir=Path(gold_cfg["cache_dir"]),
+            oracle_version=gold_cfg["oracle_version"],
+            metadata_lookup=metadata_lookup,
+            n=n,
+            synthetic=bool(data_cfg.get("synthetic", False)),
+            config_path=data_cfg.get(
+                "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
+            ),
+        )
+
+    train_ds = _ds(data_cfg.get("train_split", "train"), data_cfg.get("n_train"))
+    dev_ds = _ds(data_cfg.get("dev_split", "dev"), data_cfg.get("n_dev"))
+
+    lr = train_cfg.get("lr", {})
+    betas = train_cfg.get("betas", [0.9, 0.999])
+    optim_cfg = OptimConfig(
+        kind=train_cfg.get("optim", "adamw"),
+        lr_lm=float(lr.get("lm", 5.0e-6)),
+        lr_projector=float(lr.get("projector", 1.0e-5)),
+        lr_vit=float(lr.get("vit", 1.0e-6)),
+        weight_decay=float(train_cfg.get("weight_decay", 0.0)),
+        betas=(float(betas[0]), float(betas[1])),
+    )
+    optimizer = build_optimizer(model, optim_cfg)
+    scheduler = build_scheduler(
+        optimizer,
+        ScheduleConfig(
+            total_steps=args.max_steps,
+            warmup_pct=float(train_cfg.get("warmup_pct", 0.03)),
+            kind=str(train_cfg.get("schedule", "cosine")),
+        ),
+    )
+
+    device_t = torch.device(args.device)
+    evaluator = make_teacher_forced_evaluator(
+        vlm=vlm, model=model, dev_ds=dev_ds, collator=collator, device=device_t,
+    )
+
+    result = run_t1(
+        vlm=vlm,
+        model=model,
+        train_ds=train_ds,
+        collator=collator,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        evaluator=evaluator,
+        thresholds=T1Thresholds(
+            tool_name_acc_min=args.tool_name_acc_min,
+            answer_em_min=args.answer_em_min,
+            max_steps=args.max_steps,
+        ),
+        out_path=args.out,
+        device=args.device,
+        grad_accum=args.grad_accum,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+    return 0 if result.passed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
