@@ -4,12 +4,16 @@ Reads:
   runs/smoke/train_log.jsonl        (per-step metrics + fit_done)
   runs/t0/gates/T0.json             (env-gate verdict)
   runs/t1/gates/T1.json             (clean-FT-gate verdict)
+  runs/<id>/gates/baseline_per_sample.json   (optional)
+  runs/<id>/gates/defended_per_sample.json   (optional)
+  runs/<id>/gates/T3.json                    (optional)
 
 Writes:
   figures/fig01_smoke_loss.png
   figures/fig02_smoke_grad_mem.png
   figures/fig03_smoke_attack.png
   figures/fig04_gates_summary.png
+  figures/fig05_robust_comparison.png  (if T3 inputs present)
 """
 from __future__ import annotations
 
@@ -165,6 +169,104 @@ def render_gates(t0: dict, t1: dict, out_path: Path) -> None:
     plt.close(fig)
 
 
+def render_robust_comparison(
+    baseline_per_sample: dict[str, list[float]],
+    defended_per_sample: dict[str, list[float]],
+    t3_payload: dict,
+    out_path: Path,
+) -> None:
+    """Render Δ = mean(defended) - mean(baseline) per T3 metric, with
+    stars on BH-FDR-significant metrics. Bars include 95% bootstrap CIs
+    on Δ to give a sense of effect size, not just p-value sign.
+    """
+    metrics = [
+        m
+        for m in ("tool_name_acc", "args_iou", "answer_em", "traj_edit_distance")
+        if m in baseline_per_sample and m in defended_per_sample
+    ]
+    significant = set(t3_payload.get("significant_metrics", []))
+    deltas: list[float] = []
+    ci_lo: list[float] = []
+    ci_hi: list[float] = []
+    n_per_metric: list[int] = []
+    for metric in metrics:
+        baseline = baseline_per_sample[metric]
+        defended = defended_per_sample[metric]
+        n = min(len(baseline), len(defended))
+        n_per_metric.append(n)
+        if n == 0:
+            deltas.append(float("nan"))
+            ci_lo.append(float("nan"))
+            ci_hi.append(float("nan"))
+            continue
+        per_sample_delta = [defended[i] - baseline[i] for i in range(n)]
+        mean_delta = sum(per_sample_delta) / n
+        deltas.append(mean_delta)
+        ci_lo.append(_bootstrap_ci(per_sample_delta, lo=True))
+        ci_hi.append(_bootstrap_ci(per_sample_delta, lo=False))
+
+    fig, ax = plt.subplots(figsize=(7.0, 3.6))
+    x = list(range(len(metrics)))
+    yerr = [
+        [max(0.0, deltas[i] - ci_lo[i]) for i in range(len(metrics))],
+        [max(0.0, ci_hi[i] - deltas[i]) for i in range(len(metrics))],
+    ]
+    bars = ax.bar(x, deltas, yerr=yerr, capsize=4, color="#4c72b0", alpha=0.85)
+    for i, metric in enumerate(metrics):
+        if metric in significant:
+            ax.text(
+                x[i],
+                deltas[i] + (yerr[1][i] if not math.isnan(yerr[1][i]) else 0.0) + 0.01,
+                "*",
+                ha="center",
+                va="bottom",
+                fontsize=14,
+                color="#cc4c02",
+            )
+    ax.axhline(0.0, color="gray", linewidth=0.7)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics, rotation=15, ha="right")
+    ax.set_ylabel("Δ = defended − baseline (similarity, higher is better)")
+    n_total = max(n_per_metric) if n_per_metric else 0
+    passed = bool(t3_payload.get("passed"))
+    ax.set_title(
+        f"Robust-eval Δ vs undefended baseline — n={n_total} paired "
+        f"(samples × ε), T3 {'PASS' if passed else 'FAIL'}"
+    )
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _bootstrap_ci(
+    samples: list[float],
+    *,
+    lo: bool,
+    n_resamples: int = 2000,
+    confidence: float = 0.95,
+    seed: int = 0,
+) -> float:
+    """Percentile bootstrap on the mean. Deterministic via fixed seed
+    so figure rendering is reproducible. Returns the lo or hi
+    boundary of the central ``confidence`` interval.
+    """
+    if not samples:
+        return float("nan")
+    import random
+
+    rng = random.Random(seed)
+    n = len(samples)
+    means = []
+    for _ in range(n_resamples):
+        resample = [samples[rng.randrange(n)] for _ in range(n)]
+        means.append(sum(resample) / n)
+    means.sort()
+    alpha = (1.0 - confidence) / 2.0
+    idx = int(alpha * n_resamples) if lo else int((1.0 - alpha) * n_resamples) - 1
+    idx = max(0, min(n_resamples - 1, idx))
+    return means[idx]
+
+
 def main() -> int:
     smoke_path = RUNS / "smoke" / "train_log.jsonl"
     t0_path = RUNS / "t0" / "gates" / "T0.json"
@@ -199,7 +301,23 @@ def main() -> int:
     render_attack(train_steps, OUT / "fig03_smoke_attack.png")
     render_gates(t0, t1, OUT / "fig04_gates_summary.png")
 
-    print(f"wrote 4 figures to {OUT}")
+    n_figures = 4
+    robust_dirs = sorted(RUNS.glob("*/gates/T3.json"))
+    for t3_path in robust_dirs:
+        gates_dir = t3_path.parent
+        baseline_path = gates_dir / "baseline_per_sample.json"
+        defended_path = gates_dir / "defended_per_sample.json"
+        if not (baseline_path.exists() and defended_path.exists()):
+            continue
+        run_name = gates_dir.parent.name
+        baseline_ps = load_json_lenient(baseline_path)
+        defended_ps = load_json_lenient(defended_path)
+        t3_payload = load_json_lenient(t3_path)
+        out_path = OUT / f"fig05_robust_comparison_{run_name}.png"
+        render_robust_comparison(baseline_ps, defended_ps, t3_payload, out_path)
+        n_figures += 1
+
+    print(f"wrote {n_figures} figures to {OUT}")
     for p in sorted(OUT.glob("*.png")):
         print(f"  {p.relative_to(ROOT)}  ({p.stat().st_size // 1024} KiB)")
     return 0
