@@ -28,6 +28,7 @@ log_every: 1
 eval_every: 0               # disable periodic eval for smoke
 save_every: 5               # save ckpt at step 5 (smoke contract: ckpt written)
 ckpt_keep: 1
+final_save_include_optimizer: false   # smoke is throwaway; weights-only end-save fits in disk headroom
 
 metric_for_best: tool_name_acc
 

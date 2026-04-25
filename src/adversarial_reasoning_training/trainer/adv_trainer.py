@@ -44,6 +44,7 @@ class TrainerConfig:
     alpha_ratio: float = 0.25
     pgd_steps: int = 7
     run_dir: Path = Path("runs/default")
+    final_save_include_optimizer: bool = True
 
 
 class AdvTrainer:
@@ -286,6 +287,7 @@ class AdvTrainer:
             epoch=self.config.epochs,
             metric_value=metric_value,
             extra={"metrics": metrics, "final": True},
+            include_optimizer=self.config.final_save_include_optimizer,
         )
         self._log({
             "event": "fit_done",

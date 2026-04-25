@@ -134,6 +134,9 @@ def main() -> None:
         alpha_ratio=defense_cfg["pgd"].get("alpha_ratio", 0.25),
         pgd_steps=defense_cfg["pgd"].get("steps", 7),
         run_dir=args.run_dir,
+        final_save_include_optimizer=train_cfg.get(
+            "final_save_include_optimizer", True
+        ),
     )
     trainer = AdvTrainer(
         vlm=vlm,
