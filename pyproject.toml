@@ -76,6 +76,11 @@ flash = [
 Homepage = "https://github.com/KosmasApostolidis/adversarial-reasoning-training"
 Attacks = "https://github.com/KosmasApostolidis/adversarial-reasoning-attacks"
 
+[project.scripts]
+art-train = "adversarial_reasoning_training.cli.train:main"
+art-eval-robust = "adversarial_reasoning_training.cli.eval_robust:main"
+art-make-gold = "adversarial_reasoning_training.cli.make_gold:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
