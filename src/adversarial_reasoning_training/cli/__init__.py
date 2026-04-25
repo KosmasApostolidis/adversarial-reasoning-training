@@ -10,4 +10,4 @@ script layer.
 from .config import load_yaml
 from .runtime import setup_device, setup_run_dir, setup_seed
 
-__all__ = ["load_yaml", "setup_seed", "setup_device", "setup_run_dir"]
+__all__ = ["load_yaml", "setup_device", "setup_run_dir", "setup_seed"]

@@ -1,15 +1,15 @@
-"""Robust-eval bridge: swap checkpoint path into attacks-repo runner."""
+"""Robust-eval bridge: read attacks-repo records.jsonl, align as paired per-sample."""
 
 from .robust_eval import (
-    RobustEvalConfig,
-    load_defended_vlm,
-    run_robust_suite,
+    align_per_sample,
+    load_records,
+    records_to_per_sample,
     save_per_sample,
 )
 
 __all__ = [
-    "RobustEvalConfig",
-    "load_defended_vlm",
-    "run_robust_suite",
+    "align_per_sample",
+    "load_records",
+    "records_to_per_sample",
     "save_per_sample",
 ]
