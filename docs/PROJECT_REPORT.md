@@ -73,8 +73,13 @@ Each *outer* step performs:
 
 1. **Inner PGD.** A wrapper around `attacks.pgd.PGDAttack` crafts
    `x_adv` that maximises the teacher-forced cross-entropy on the
-   gold trajectory, with an ε curriculum
-   (2/255 → 4/255 → 8/255 across epochs).
+   gold trajectory. ε is resolved per epoch via
+   `attacks.inner_pgd.epsilon_for_epoch` from a configurable
+   `eps_schedule` (the trainer falls back to `default_epsilon`
+   when no schedule is wired). The schedule defined in
+   `configs/defenses.yaml` is `2/255` for epochs 1–2, `4/255` for
+   epoch 3, `8/255` for epochs 4–5; smoke runs use a constant
+   `2/255` (no schedule).
 2. **Two forward passes.** One on the clean image, one on `x_adv`,
    both over the full teacher-forced sequence.
 3. **Loss.** A configurable selector dispatches to one of:
@@ -95,11 +100,14 @@ Each *outer* step performs:
 ## 4. Data pipeline
 
 - **Source:** BHI ProstateX volumes pre-organized into 3 folds
-  (`fold_1` / `fold_2` / `fold_3`).
-  Mapping: `fold_1 → train (55 samples)`,
-  `fold_2 → dev (54)`, `fold_3 → test (54)`.
-  Configured in `configs/data.yaml` and routed through the
-  attacks-repo `load_task_sample` loader.
+  (`fold_1` / `fold_2` / `fold_3`), wired by the
+  `bhi_split_to_fold` mapping in the attacks-repo
+  `configs/tasks.yaml`: `fold_1 → train`, `fold_2 → dev`,
+  `fold_3 → test`. `configs/data.yaml` documents the train fold
+  size (55 samples for `fold_1`); the dev/test fold sizes are
+  whatever the corresponding fold `.npy` arrays actually contain
+  on disk (resolved at load time by the attacks-repo
+  `load_task_sample` loader).
 - **Synthetic mode** (`synthetic: true`) drives sample iteration off
   the attacks-repo synthetic generator, so smoke runs require no
   real DICOMs. Smoke uses synthetic; T1 onward uses real BHI volumes.
@@ -187,9 +195,11 @@ In rough priority order:
    monitored before any long adversarial training run is committed
    to disk.
 3. **First real adversarial training run** on Qwen2.5-VL-7B with the
-   full ε curriculum (configs/training.yaml). Target: complete one
-   epoch and verify dev `tool_name_acc` stays within ≈ 5 pp of the
-   T1 clean-FT baseline.
+   full ε curriculum from `configs/defenses.yaml` (wired through
+   `configs/training.yaml` via the trainer's `eps_schedule`
+   field). Target: complete one epoch and verify dev
+   `tool_name_acc` stays within ≈ 5 pp of the T1 clean-FT
+   baseline.
 4. **Wire T3** to the attacks-repo robust-eval runner and produce
    the first defended-vs-undefended comparison plot (BH-FDR over
    PGD budgets).
