@@ -88,26 +88,29 @@ def run_t1(
     micro = 0
     loss_final = float("nan")
 
-    for batch in loader:
-        if step >= thresholds.max_steps:
-            break
-        batch = batch.to(device_t)
-        with torch.autocast(device_type=device_t.type, dtype=amp_dtype):
-            logits = _clean_forward(vlm, batch, device_t)
-            loss = task_ce(logits, batch.input_ids, batch.task_mask)
+    # 200 outer steps × grad_accum 8 = 1600 micro-batches; train_ds has 55
+    # samples, so we cycle the loader across epochs until step hits max_steps.
+    while step < thresholds.max_steps:
+        for batch in loader:
+            if step >= thresholds.max_steps:
+                break
+            batch = batch.to(device_t)
+            with torch.autocast(device_type=device_t.type, dtype=amp_dtype):
+                logits = _clean_forward(vlm, batch, device_t)
+                loss = task_ce(logits, batch.input_ids, batch.task_mask)
 
-        (loss / grad_accum).backward()
-        micro += 1
-        if micro % grad_accum == 0:
-            torch.nn.utils.clip_grad_norm_(
-                (p for p in model.parameters() if p.requires_grad), max_norm=1.0,
-            )
-            optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
-            step += 1
-            loss_final = float(loss.detach())
+            (loss / grad_accum).backward()
+            micro += 1
+            if micro % grad_accum == 0:
+                torch.nn.utils.clip_grad_norm_(
+                    (p for p in model.parameters() if p.requires_grad), max_norm=1.0,
+                )
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                step += 1
+                loss_final = float(loss.detach())
 
     metrics = evaluator(step, 1) or {}
     tool_acc = float(metrics.get(tool_name_metric, 0.0))
@@ -154,19 +157,26 @@ def make_teacher_forced_evaluator(
 
     Why a proxy: real free-form generation eval requires .generate() + JSON
     parsing + per-sample exact match — substantial work and out-of-scope
-    for this gate. Teacher-forced argmax over `task_mask` positions
-    measures whether the model can predict the next gold tool-token given
-    the gold prefix; the same over `traj_mask` measures whole-trajectory
-    next-token coverage. Both are upper bounds on free-gen quality but
-    correlate closely after 200 steps.
+    for this gate. The proxy gates on `segment_ids` so the two metrics
+    actually measure different things:
+
+      * `tool_name_acc` = argmax accuracy on TOOL_NAME positions only
+      * `answer_em`     = argmax accuracy on ANSWER positions only
+
+    DEFAULT_MASK_WEIGHTS uses identical weights for `task` and `traj`, so
+    the soft masks alone would not distinguish the two metrics.
     """
+    from ..trajectory.segments import SegmentKind
+
+    tool_name_id = int(SegmentKind.TOOL_NAME.value)
+    answer_id = int(SegmentKind.ANSWER.value)
 
     def _evaluate(global_step: int, epoch: int) -> dict[str, float]:
         loader = DataLoader(dev_ds, batch_size=1, shuffle=False, collate_fn=collator)
         was_training = model.training
         model.train(False)
-        task_correct = task_total = 0
-        traj_correct = traj_total = 0
+        tool_correct = tool_total = 0
+        ans_correct = ans_total = 0
         with torch.no_grad():
             for batch in loader:
                 batch = batch.to(device)
@@ -175,19 +185,20 @@ def make_teacher_forced_evaluator(
                 preds = logits.argmax(dim=-1)
                 gold = batch.input_ids
                 match = preds[:, :-1] == gold[:, 1:]
-                task_m = batch.task_mask[:, 1:].bool()
-                traj_m = batch.traj_mask[:, 1:].bool()
-                task_correct += int(match[task_m].sum().item())
-                task_total += int(task_m.sum().item())
-                traj_correct += int(match[traj_m].sum().item())
-                traj_total += int(traj_m.sum().item())
+                seg = batch.segment_ids[:, 1:]
+                tool_m = seg == tool_name_id
+                ans_m = seg == answer_id
+                tool_correct += int(match[tool_m].sum().item())
+                tool_total += int(tool_m.sum().item())
+                ans_correct += int(match[ans_m].sum().item())
+                ans_total += int(ans_m.sum().item())
         if was_training:
             model.train(True)
         return {
-            "tool_name_acc": task_correct / max(1, task_total),
-            "answer_em": traj_correct / max(1, traj_total),
-            "task_token_count": float(task_total),
-            "traj_token_count": float(traj_total),
+            "tool_name_acc": tool_correct / max(1, tool_total),
+            "answer_em": ans_correct / max(1, ans_total),
+            "tool_name_token_count": float(tool_total),
+            "answer_token_count": float(ans_total),
         }
 
     return _evaluate
