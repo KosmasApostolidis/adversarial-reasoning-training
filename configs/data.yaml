@@ -11,9 +11,9 @@ dev_split: dev
 test_split: test
 
 # Synthetic mode: drives sample iteration off attacks-repo synthetic generator.
-# Set false once real Pats/ data is restored.
-synthetic: true
-n_train: null               # null = full split
+# Smoke uses synthetic; T1 onward uses real BHI volumes.
+synthetic: false
+n_train: null               # null = full split (55 fold_1 samples)
 n_dev: 16                   # cap dev for fast eval
 
 # Optional metadata file used by make_gold_trajectories.py.
