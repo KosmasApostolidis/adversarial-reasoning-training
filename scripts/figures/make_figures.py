@@ -14,6 +14,9 @@ Writes:
   figures/fig03_smoke_attack.png
   figures/fig04_gates_summary.png
   figures/fig05_robust_comparison.png  (if T3 inputs present)
+
+Note: ``figures/`` is gitignored; this script regenerates everything from the
+tracked configs and the on-disk runs/ artifacts.
 """
 from __future__ import annotations
 
