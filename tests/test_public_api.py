@@ -59,7 +59,7 @@ LEGACY_DEEP_IMPORTS = [
     ("adversarial_reasoning_training.data.dataset", "ProstateXTrainDS"),
     ("adversarial_reasoning_training.data.gold", "save_gold"),
     ("adversarial_reasoning_training.attacks.inner_pgd", "run_inner_pgd"),
-    ("adversarial_reasoning_training.eval.robust_eval", "RobustEvalConfig"),
+    ("adversarial_reasoning_training.eval.robust_eval", "align_per_sample"),
     ("adversarial_reasoning_training.trainer.adv_trainer", "AdvTrainer"),
     ("adversarial_reasoning_training.trainer.optim", "build_optimizer"),
     ("adversarial_reasoning_training.trainer.freeze", "apply_freeze"),
