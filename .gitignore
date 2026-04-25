@@ -39,6 +39,9 @@ checkpoints/
 *.safetensors
 *.bin
 
+# Generated figures (reproducible via scripts/figures/make_figures.py)
+/figures/
+
 # Dataset / gold trajectory cache
 data/gold/*.json
 data/gold/*.jsonl
