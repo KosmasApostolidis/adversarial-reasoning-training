@@ -97,7 +97,10 @@ def run_t0(
     if x_adv.ndim == 3:
         x_adv = x_adv.unsqueeze(0)
 
-    model.train(True)
+    # Keep model in eval mode: attacks-repo qwen_vl.forward_with_logits
+    # asserts ``self.model.training is False``. Grads still flow under
+    # eval mode (dropout/BN stay frozen); this matches adv_trainer's
+    # outer step which never re-enables train mode after inner PGD.
     for p in model.parameters():
         if p.grad is not None:
             p.grad = None
@@ -121,9 +124,9 @@ def run_t0(
     gn_lm = _role_grad_norm(model, _LM_PATTERNS)
 
     mem = current_memory_stats()
-    peak_gb = mem.peak_gib
+    peak_gb = mem.peak_allocated_gb
 
-    loss_clean = float(loss_out.components.get("task", float("nan")))
+    loss_clean = float(loss_out.components.get("loss_task", float("nan")))
     loss_total = float(loss_out.total.detach())
 
     passed = True
@@ -152,3 +155,93 @@ def run_t0(
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result.to_dict(), f, indent=2)
     return result
+
+
+def _main() -> int:
+    """CLI entrypoint:
+    ``python -m adversarial_reasoning_training.gates.T0_env --model qwen2_5_vl_7b ...``
+    """
+    import argparse
+
+    import yaml
+
+    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
+
+    from ..data.dataset import ProstateXTrainDS
+    from ..gold.oracle import load_metadata_csv
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument("--defenses", type=Path, default=Path("configs/defenses.yaml"))
+    parser.add_argument("--data", type=Path, default=Path("configs/data.yaml"))
+    parser.add_argument("--gold", type=Path, default=Path("configs/gold.yaml"))
+    parser.add_argument("--full-ft", type=Path, default=Path("configs/full_ft.yaml"))
+    parser.add_argument(
+        "--models-yaml", type=Path,
+        default=Path("../adversarial-reasoning-attacks/configs/models.yaml"),
+    )
+    parser.add_argument("--out", type=Path, default=Path("runs/t0/gates/T0.json"))
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--epsilon", type=float, default=4.0 / 255.0)
+    parser.add_argument("--pgd-steps", type=int, default=3)
+    args = parser.parse_args()
+
+    def _load(path: Path) -> dict[str, Any]:
+        with path.open("r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
+    defense_cfg = _load(args.defenses)
+    data_cfg = _load(args.data)
+    gold_cfg = _load(args.gold)
+    ft_cfg = _load(args.full_ft)
+    defense_cfg.setdefault("defense", "trades")
+
+    vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
+    model = vlm.model
+    model.to(torch.bfloat16)
+
+    from ..trainer.freeze import FreezeConfig, apply_freeze
+    apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
+
+    collator = TFCollator(
+        family=vlm.family,
+        processor=getattr(vlm, "processor", None) or vlm.tokenizer,
+    )
+    metadata_csv = data_cfg.get("metadata_csv")
+    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
+    ds = ProstateXTrainDS(
+        task_id=data_cfg["task_id"],
+        split=data_cfg.get("train_split", "train"),
+        cache_dir=Path(gold_cfg["cache_dir"]),
+        oracle_version=gold_cfg["oracle_version"],
+        metadata_lookup=metadata_lookup,
+        n=1,
+        synthetic=bool(data_cfg.get("synthetic", False)),
+        config_path=data_cfg.get(
+            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
+        ),
+    )
+
+    def _factory() -> Any:
+        return ds[0]
+
+    peak_limit = float(ft_cfg.get("memory", {}).get("peak_memory_limit_gb", 120.0))
+
+    result = run_t0(
+        vlm=vlm,
+        model=model,
+        collator=collator,
+        sample_factory=_factory,
+        defense_cfg=defense_cfg,
+        out_path=args.out,
+        peak_memory_limit_gb=peak_limit,
+        device=args.device,
+        epsilon=args.epsilon,
+        pgd_steps=args.pgd_steps,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+    return 0 if result.passed else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
