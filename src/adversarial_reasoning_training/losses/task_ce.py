@@ -40,6 +40,10 @@ def task_ce(
         shift_labels.view(-1),
         reduction="none",
     ).view_as(shift_labels)
-    weighted = ce * shift_mask
+    # NaN-safe masking: scrub ±inf/NaN from CE then zero out non-mask positions
+    # via `where` so NaN*0 cannot poison the reduction.
+    ce = torch.nan_to_num(ce, nan=0.0, posinf=0.0, neginf=0.0)
+    mask_b = shift_mask.bool()
+    weighted = torch.where(mask_b, ce, ce.new_zeros(()))
     denom = shift_mask.sum().clamp_min(1.0)
     return weighted.sum() / denom

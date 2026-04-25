@@ -45,6 +45,11 @@ def traj_kl(
     log_p_adv = F.log_softmax(shift_adv, dim=-1)
     p_clean = log_p_clean.exp()
     kl_per_pos = (p_clean * (log_p_clean - log_p_adv)).sum(dim=-1)
-    weighted = kl_per_pos * shift_mask * (temperature * temperature)
+    # NaN-safe masking: NaN*0=NaN, so zero out non-mask positions via `where`,
+    # then nan_to_num scrubs ±inf produced by log_softmax overflow under bf16.
+    kl_per_pos = torch.nan_to_num(kl_per_pos, nan=0.0, posinf=0.0, neginf=0.0)
+    mask_b = shift_mask.bool()
+    kl_masked = torch.where(mask_b, kl_per_pos, kl_per_pos.new_zeros(()))
+    weighted = kl_masked * (temperature * temperature)
     denom = shift_mask.sum().clamp_min(1.0)
     return weighted.sum() / denom

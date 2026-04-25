@@ -14,6 +14,7 @@ CE against a `target` token sequence at the correct causal-LM offsets
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Any
 
@@ -85,13 +86,23 @@ def run_inner_pgd(
         for k, v in batch.forward_kwargs.items()
         if k != "pixel_values" and v is not None
     }
-    return attack.run(
+    result = attack.run(
         vlm=vlm,
         image=image_tensor,
         prompt_tokens=prompt_tokens,
         target=target_tokens,
         forward_kwargs=fwd_kwargs,
     )
+    # Finite-image sentinel: if PGD diverges to NaN/inf pixels, fall back to
+    # the clean image so the outer trainer can still take a (clean) step
+    # rather than poisoning the model. Loss is marked NaN to surface in logs.
+    if not torch.isfinite(result.perturbed_image).all():
+        result = dataclasses.replace(
+            result,
+            perturbed_image=image_tensor.detach().clone(),
+            loss_final=float("nan"),
+        )
+    return result
 
 
 def epsilon_for_epoch(

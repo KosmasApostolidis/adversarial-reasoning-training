@@ -36,6 +36,7 @@ class TrainerConfig:
     grad_accum: int = 8
     log_every: int = 20
     eval_every: int = 200
+    save_every: int = 0  # 0 disables; >0 saves ckpt every N global_steps
     grad_clip_norm: float = 1.0
     amp_dtype: str = "bf16"  # bf16 | fp16 | fp32
     eps_schedule: list[dict[str, Any]] | None = None
@@ -178,16 +179,47 @@ class AdvTrainer:
             for micro_idx, batch in enumerate(loader):
                 batch_t: TeacherForcedBatch = batch.to(self.device)
                 loss_out, diag = self._outer_step(batch_t, epsilon)
+
+                # Finite-loss guard: a single bad batch must not poison every
+                # subsequent step. Drop grads for this micro-batch and continue.
+                if not torch.isfinite(loss_out.total):
+                    self._log({
+                        "event": "skipped_nan_loss",
+                        "global_step": global_step,
+                        "epoch": epoch,
+                        "micro_idx": micro_idx,
+                        **diag,
+                    })
+                    self.optimizer.zero_grad(set_to_none=True)
+                    accum_loss_acc = 0.0
+                    continue
+
                 (loss_out.total / self.config.grad_accum).backward()
                 accum_loss_acc += float(loss_out.total.detach())
 
                 do_step = ((micro_idx + 1) % self.config.grad_accum) == 0
                 if do_step:
                     if self.config.grad_clip_norm and self.config.grad_clip_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(
-                            (p for p in self.model.parameters() if p.requires_grad),
+                        total_norm = torch.nn.utils.clip_grad_norm_(
+                            [p for p in self.model.parameters() if p.requires_grad],
                             max_norm=self.config.grad_clip_norm,
                         )
+                    else:
+                        total_norm = torch.tensor(0.0)
+
+                    # Finite-grad guard: clip_grad_norm_ does not zero NaN
+                    # grads; optimizer.step() would propagate them into params.
+                    if not torch.isfinite(total_norm):
+                        self._log({
+                            "event": "skipped_nan_grad",
+                            "global_step": global_step,
+                            "epoch": epoch,
+                            "grad_norm": float("nan"),
+                        })
+                        self.optimizer.zero_grad(set_to_none=True)
+                        accum_loss_acc = 0.0
+                        continue
+
                     self.optimizer.step()
                     if self.scheduler is not None:
                         self.scheduler.step()
@@ -204,10 +236,21 @@ class AdvTrainer:
                             "epoch": epoch,
                             "avg_loss": avg_loss,
                             "wall_s": time.time() - start_time,
+                            "grad_norm": float(total_norm),
                             **loss_out.components,
                             **diag,
                             **mem.as_dict(),
                         })
+
+                    if self.config.save_every > 0 and global_step % self.config.save_every == 0:
+                        self.ckpt.save(
+                            model=self.model,
+                            optimizer=self.optimizer,
+                            step=global_step,
+                            epoch=epoch,
+                            metric_value=None,
+                            extra={"reason": "save_every"},
+                        )
 
                     if self.config.eval_every > 0 and global_step % self.config.eval_every == 0:
                         metrics = (
@@ -235,7 +278,7 @@ class AdvTrainer:
         self.ckpt.save(
             model=self.model,
             optimizer=self.optimizer,
-            step=global_step,
+            step=max(1, global_step),
             epoch=self.config.epochs,
             metric_value=metric_value,
             extra={"metrics": metrics, "final": True},

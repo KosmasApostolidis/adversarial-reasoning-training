@@ -26,6 +26,7 @@ grad_clip_norm: 1.0
 
 log_every: 1
 eval_every: 0               # disable periodic eval for smoke
+save_every: 5               # save ckpt at step 5 (smoke contract: ckpt written)
 ckpt_keep: 1
 
 metric_for_best: tool_name_acc

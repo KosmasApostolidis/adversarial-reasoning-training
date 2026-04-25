@@ -126,6 +126,8 @@ def main() -> None:
         grad_accum=train_cfg["grad_accum"],
         log_every=train_cfg.get("log_every", 20),
         eval_every=train_cfg.get("eval_every", 200),
+        save_every=train_cfg.get("save_every", 0),
+        grad_clip_norm=train_cfg.get("grad_clip_norm", 1.0),
         amp_dtype=train_cfg.get("amp", "bf16"),
         eps_schedule=defense_cfg["pgd"].get("eps_schedule"),
         default_epsilon=defense_cfg["pgd"].get("default_eps", 4.0 / 255.0),
