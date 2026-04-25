@@ -123,7 +123,11 @@ the 50-case expert-reviewed probe. Re-run only when `configs/gold.yaml`
 or the upstream metadata changes.
 
 ```bash
-art-make-gold --config configs/gold.yaml --data configs/data.yaml
+art-make-gold \
+  --config configs/gold.yaml \
+  --data   configs/data.yaml \
+  --split  train
+# add --n N to cap samples for a quick smoke; add --overwrite to refresh cache.
 ```
 
 Underlying entry: `src/adversarial_reasoning_training/cli/make_gold.py`
@@ -152,53 +156,110 @@ do not regenerate per seed.
 
 ## CLI Reference
 
-`art-train` (from `src/adversarial_reasoning_training/cli/train.py:45`):
+Every command below lists **all** flags so phase commands can be copy-
+pasted unedited. Optional flags retain their CLI defaults when given
+explicitly — this keeps reproducibility intact.
+
+`art-train` (`src/adversarial_reasoning_training/cli/train.py:45`):
 
 ```
 art-train \
-  --config <training.yaml> \
-  --defenses <defenses.yaml> \
-  --data <data.yaml> \
-  --gold <gold.yaml> \
-  --full-ft <full_ft.yaml> \
-  --model <model_family_id> \
-  --run-dir <runs/<id>> \
-  [--device cuda] [--seed 0] \
-  [--models-yaml ../adversarial-reasoning-attacks/configs/models.yaml]
+  --config   configs/training.yaml \
+  --defenses configs/defenses.yaml \
+  --data     configs/data.yaml \
+  --gold     configs/gold.yaml \
+  --full-ft  configs/full_ft.yaml \
+  --model    <model_family_id> \
+  --run-dir  runs/<id> \
+  --device   cuda \
+  --seed     0 \
+  --models-yaml ../adversarial-reasoning-attacks/configs/models.yaml
 ```
 
-`art-eval-robust` (from `src/adversarial_reasoning_training/cli/eval_robust.py:34`):
+`art-eval-robust` (`src/adversarial_reasoning_training/cli/eval_robust.py:34`):
 
 ```
 art-eval-robust \
-  --baseline-records <records.jsonl> \
-  --defended-records <records.jsonl> \
-  --out-dir <dir> \
-  [--alpha 0.05] [--min-traj-edit-delta 0.10] [--min-significant-metrics 3]
+  --baseline-records       <records.jsonl> \
+  --defended-records       <records.jsonl> \
+  --out-dir                <dir> \
+  --alpha                  0.05 \
+  --min-traj-edit-delta    0.10 \
+  --min-significant-metrics 3
 ```
 
-Per-sample `records.jsonl` is produced by the attacks-repo runner
+`art-make-gold` (`src/adversarial_reasoning_training/cli/make_gold.py:30`):
+
+```
+art-make-gold \
+  --config configs/gold.yaml \
+  --data   configs/data.yaml \
+  --split  train             # train | dev | test
+  # --n N                    # optional sample cap; omit for full split
+  # --overwrite               # destructive; only when refreshing cache
+```
+
+Per-sample `records.jsonl` from the attacks-repo runner
 (`adversarial-reasoning-attacks/src/adversarial_reasoning/runner.py`):
 
 ```
 python -m adversarial_reasoning.runner \
-  --config <experiments/<exp>.yaml> \
+  --config         configs/experiments/<exp>.yaml \
   --attacks-config configs/attacks.yaml \
-  --split <dev|test> --max-steps 8 --pgd-steps 20 \
-  --out <records.jsonl>
+  --split          dev \
+  --max-steps      8 \
+  --pgd-steps      20 \
+  --target-tool    escalate_to_specialist \
+  --target-step-k  0 \
+  --out            <records.jsonl>
 ```
 
-Model registry IDs (from `../adversarial-reasoning-attacks/configs/models.yaml`):
+Model registry IDs (`../adversarial-reasoning-attacks/configs/models.yaml`):
 `qwen2_5_vl_7b`, `llava_v1_6_mistral_7b`, `llama_3_2_vision_11b`,
 `defended_qwen2_5_vl_7b`.
 
-Gates that run as standalone modules (per `gates/T*.py` docstrings):
+Gates as standalone modules:
 
 ```
-python -m adversarial_reasoning_training.gates.T0_env --model <id> --out <T0.json>
-python -m adversarial_reasoning_training.gates.T1_clean --model <id> [...] --out <T1.json>
-python -m adversarial_reasoning_training.gates.T2_no_collapse --model <id> --ckpt <best.pt> --out <T2.json>
+# T0: env + 1 fwd/bwd smoke
+python -m adversarial_reasoning_training.gates.T0_env \
+  --model    <id> \
+  --defenses configs/defenses.yaml \
+  --data     configs/data.yaml \
+  --gold     configs/gold.yaml \
+  --full-ft  configs/full_ft.yaml \
+  --device   cuda \
+  --epsilon  0.01568627  \
+  --pgd-steps 3 \
+  --out      runs/<id>/gates/T0.json
+
+# T1: clean-only FT convergence
+python -m adversarial_reasoning_training.gates.T1_clean \
+  --model    <id> \
+  --training configs/training.yaml \
+  --data     configs/data.yaml \
+  --gold     configs/gold.yaml \
+  --full-ft  configs/full_ft.yaml \
+  --device   cuda \
+  --max-steps         200 \
+  --grad-accum        8 \
+  --tool-name-acc-min 0.85 \
+  --answer-em-min     0.70 \
+  --out      runs/<id>/gates/T1.json
+
+# T2: no-collapse (requires T1 result + adv-FT checkpoint)
+python -m adversarial_reasoning_training.gates.T2_no_collapse \
+  --model        <id> \
+  --ckpt         runs/<id>/ckpt/best.pt \
+  --t1-result    runs/<id>/gates/T1.json \
+  --data         configs/data.yaml \
+  --gold         configs/gold.yaml \
+  --device       cuda \
+  --tolerance-pp 3.0 \
+  --out          runs/<id>/gates/T2.json
 ```
+
+T3 runs via `art-eval-robust` above (see `gates/T3_robust.py`).
 
 ---
 
@@ -211,34 +272,53 @@ cd /home/medadmin/kosmasapostolidis/adversarial-reasoning-training
 
 # 0a. Re-run T0 to confirm cosmetic NaN fix from cb575f8.
 python -m adversarial_reasoning_training.gates.T0_env \
-  --model qwen2_5_vl_7b \
-  --out runs/t0_recheck/T0.json
+  --model      qwen2_5_vl_7b \
+  --defenses   configs/defenses.yaml \
+  --data       configs/data.yaml \
+  --gold       configs/gold.yaml \
+  --full-ft    configs/full_ft.yaml \
+  --device     cuda \
+  --epsilon    0.01568627 \
+  --pgd-steps  3 \
+  --out        runs/t0_recheck/T0.json
 
 # 0b. T1 clean-FT gate (no adversary, ≤200 steps).
 python -m adversarial_reasoning_training.gates.T1_clean \
-  --model qwen2_5_vl_7b \
-  --config configs/training.yaml \
-  --data configs/data.yaml \
-  --gold configs/gold.yaml \
-  --full-ft configs/full_ft.yaml \
-  --out runs/t1_qwen/T1.json
+  --model              qwen2_5_vl_7b \
+  --training           configs/training.yaml \
+  --data               configs/data.yaml \
+  --gold               configs/gold.yaml \
+  --full-ft            configs/full_ft.yaml \
+  --device             cuda \
+  --max-steps          200 \
+  --grad-accum         8 \
+  --tool-name-acc-min  0.85 \
+  --answer-em-min      0.70 \
+  --out                runs/t1_qwen/gates/T1.json
 
 # 0c. First end-to-end Qwen adv-FT, seed=0, full ε curriculum 2/255 → 8/255.
 art-train \
-  --config configs/training.yaml \
-  --defenses configs/defenses.yaml \
-  --data configs/data.yaml \
-  --gold configs/gold.yaml \
-  --full-ft configs/full_ft.yaml \
-  --model qwen2_5_vl_7b \
-  --run-dir runs/qwen_full_seed0 \
-  --seed 0
+  --config       configs/training.yaml \
+  --defenses     configs/defenses.yaml \
+  --data         configs/data.yaml \
+  --gold         configs/gold.yaml \
+  --full-ft      configs/full_ft.yaml \
+  --model        qwen2_5_vl_7b \
+  --run-dir      runs/qwen_full_seed0 \
+  --device       cuda \
+  --seed         0 \
+  --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 
-# 0d. T2 diversity gate against the resulting checkpoint.
+# 0d. T2 no-collapse gate against the resulting checkpoint.
 python -m adversarial_reasoning_training.gates.T2_no_collapse \
-  --model qwen2_5_vl_7b \
-  --ckpt runs/qwen_full_seed0/ckpt/best.pt \
-  --out runs/qwen_full_seed0/gates/T2.json
+  --model         qwen2_5_vl_7b \
+  --ckpt          runs/qwen_full_seed0/ckpt/best.pt \
+  --t1-result     runs/t1_qwen/gates/T1.json \
+  --data          configs/data.yaml \
+  --gold          configs/gold.yaml \
+  --device        cuda \
+  --tolerance-pp  3.0 \
+  --out           runs/qwen_full_seed0/gates/T2.json
 
 # 0e. Generate baseline (undefended) and defended records via attacks-repo runner.
 # > ⚠️ Not yet in repo: `../adversarial-reasoning-attacks/configs/experiments/{baseline_qwen,defended_qwen}.yaml`.
@@ -246,21 +326,34 @@ python -m adversarial_reasoning_training.gates.T2_no_collapse \
 # > checkpoint at `runs/qwen_full_seed0/ckpt/best.pt`.
 cd ../adversarial-reasoning-attacks
 python -m adversarial_reasoning.runner \
-  --config configs/experiments/baseline_qwen.yaml \
-  --split dev \
-  --out ../adversarial-reasoning-training/runs/baseline_qwen/records.jsonl
+  --config         configs/experiments/baseline_qwen.yaml \
+  --attacks-config configs/attacks.yaml \
+  --split          dev \
+  --max-steps      8 \
+  --pgd-steps      20 \
+  --target-tool    escalate_to_specialist \
+  --target-step-k  0 \
+  --out            ../adversarial-reasoning-training/runs/baseline_qwen/records.jsonl
 
 python -m adversarial_reasoning.runner \
-  --config configs/experiments/defended_qwen.yaml \
-  --split dev \
-  --out ../adversarial-reasoning-training/runs/qwen_full_seed0/records.jsonl
+  --config         configs/experiments/defended_qwen.yaml \
+  --attacks-config configs/attacks.yaml \
+  --split          dev \
+  --max-steps      8 \
+  --pgd-steps      20 \
+  --target-tool    escalate_to_specialist \
+  --target-step-k  0 \
+  --out            ../adversarial-reasoning-training/runs/qwen_full_seed0/records.jsonl
 cd -
 
 # 0f. T3 robust-eval gate (Wilcoxon paired + BH-FDR).
 art-eval-robust \
-  --baseline-records runs/baseline_qwen/records.jsonl \
-  --defended-records runs/qwen_full_seed0/records.jsonl \
-  --out-dir runs/qwen_full_seed0/gates/
+  --baseline-records         runs/baseline_qwen/records.jsonl \
+  --defended-records         runs/qwen_full_seed0/records.jsonl \
+  --out-dir                  runs/qwen_full_seed0/gates/ \
+  --alpha                    0.05 \
+  --min-traj-edit-delta      0.10 \
+  --min-significant-metrics  3
 ```
 
 **Exit criterion:** `runs/qwen_full_seed0/gates/{T0,T1,T2,T3}.json` all PASS;
@@ -275,26 +368,36 @@ cd /home/medadmin/kosmasapostolidis/adversarial-reasoning-training
 
 for SEED in 0 1 2 3 4; do
   art-train \
-    --config configs/training.yaml \
-    --defenses configs/defenses.yaml \
-    --data configs/data.yaml \
-    --gold configs/gold.yaml \
-    --full-ft configs/full_ft.yaml \
-    --model qwen2_5_vl_7b \
-    --run-dir runs/qwen_main_seed${SEED} \
-    --seed ${SEED}
+    --config       configs/training.yaml \
+    --defenses     configs/defenses.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        qwen2_5_vl_7b \
+    --run-dir      runs/qwen_main_seed${SEED} \
+    --device       cuda \
+    --seed         ${SEED} \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 
   cd ../adversarial-reasoning-attacks
   python -m adversarial_reasoning.runner \
-    --config configs/experiments/defended_qwen.yaml \
-    --split test \
-    --out ../adversarial-reasoning-training/runs/qwen_main_seed${SEED}/records.jsonl
+    --config         configs/experiments/defended_qwen.yaml \
+    --attacks-config configs/attacks.yaml \
+    --split          test \
+    --max-steps      8 \
+    --pgd-steps      20 \
+    --target-tool    escalate_to_specialist \
+    --target-step-k  0 \
+    --out            ../adversarial-reasoning-training/runs/qwen_main_seed${SEED}/records.jsonl
   cd -
 
   art-eval-robust \
-    --baseline-records runs/baseline_qwen/records.jsonl \
-    --defended-records runs/qwen_main_seed${SEED}/records.jsonl \
-    --out-dir runs/qwen_main_seed${SEED}/gates/
+    --baseline-records         runs/baseline_qwen/records.jsonl \
+    --defended-records         runs/qwen_main_seed${SEED}/records.jsonl \
+    --out-dir                  runs/qwen_main_seed${SEED}/gates/ \
+    --alpha                    0.05 \
+    --min-traj-edit-delta      0.10 \
+    --min-significant-metrics  3
 done
 
 # Aggregate after all 5 seeds finish.
@@ -303,11 +406,11 @@ done
 # > per-metric mean ± stderr + Wilcoxon survivors across seeds.
 python scripts/figures/aggregate_seeds.py \
   --inputs runs/qwen_main_seed{0,1,2,3,4}/gates/T3.json \
-  --out results/qwen_main/aggregate.json
+  --out    results/qwen_main/aggregate.json
 
 python scripts/figures/make_figures.py \
   --aggregate results/qwen_main/aggregate.json \
-  --out figures/fig05_qwen_main_5seeds.png
+  --out       figures/fig05_qwen_main_5seeds.png
 ```
 
 **Exit criterion:** Wilcoxon q < 0.05 on ≥3 / 4 metrics (`tool_acc`,
@@ -337,14 +440,16 @@ curriculum 2→8) — do **not** re-run.
 for LOSS in pgd_at oaat; do
   for SEED in 0 1 2 3 4; do
     art-train \
-      --config configs/ablations/loss_${LOSS}.yaml \
-      --defenses configs/defenses.yaml \
-      --data configs/data.yaml \
-      --gold configs/gold.yaml \
-      --full-ft configs/full_ft.yaml \
-      --model qwen2_5_vl_7b \
-      --run-dir runs/qwen_abl_loss_${LOSS}_seed${SEED} \
-      --seed ${SEED}
+      --config       configs/ablations/loss_${LOSS}.yaml \
+      --defenses     configs/defenses.yaml \
+      --data         configs/data.yaml \
+      --gold         configs/gold.yaml \
+      --full-ft      configs/full_ft.yaml \
+      --model        qwen2_5_vl_7b \
+      --run-dir      runs/qwen_abl_loss_${LOSS}_seed${SEED} \
+      --device       cuda \
+      --seed         ${SEED} \
+      --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
   done
 done
 ```
@@ -357,14 +462,16 @@ Apply same-step-count ceiling (cf. memory `feedback_t2_gate_budget_parity.md`).
 for BETA in 0 1 12; do
   for SEED in 0 1 2 3 4; do
     art-train \
-      --config configs/ablations/beta_${BETA}.yaml \
-      --defenses configs/defenses.yaml \
-      --data configs/data.yaml \
-      --gold configs/gold.yaml \
-      --full-ft configs/full_ft.yaml \
-      --model qwen2_5_vl_7b \
-      --run-dir runs/qwen_abl_beta_${BETA}_seed${SEED} \
-      --seed ${SEED}
+      --config       configs/ablations/beta_${BETA}.yaml \
+      --defenses     configs/defenses.yaml \
+      --data         configs/data.yaml \
+      --gold         configs/gold.yaml \
+      --full-ft      configs/full_ft.yaml \
+      --model        qwen2_5_vl_7b \
+      --run-dir      runs/qwen_abl_beta_${BETA}_seed${SEED} \
+      --device       cuda \
+      --seed         ${SEED} \
+      --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
   done
 done
 ```
@@ -375,14 +482,16 @@ done
 for FREEZE in lm_only vit_proj_frozen; do
   for SEED in 0 1 2 3 4; do
     art-train \
-      --config configs/training.yaml \
-      --defenses configs/defenses.yaml \
-      --data configs/data.yaml \
-      --gold configs/gold.yaml \
-      --full-ft configs/ablations/full_ft_${FREEZE}.yaml \
-      --model qwen2_5_vl_7b \
-      --run-dir runs/qwen_abl_freeze_${FREEZE}_seed${SEED} \
-      --seed ${SEED}
+      --config       configs/training.yaml \
+      --defenses     configs/defenses.yaml \
+      --data         configs/data.yaml \
+      --gold         configs/gold.yaml \
+      --full-ft      configs/ablations/full_ft_${FREEZE}.yaml \
+      --model        qwen2_5_vl_7b \
+      --run-dir      runs/qwen_abl_freeze_${FREEZE}_seed${SEED} \
+      --device       cuda \
+      --seed         ${SEED} \
+      --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
   done
 done
 ```
@@ -392,14 +501,16 @@ done
 ```bash
 for SEED in 0 1 2 3 4; do
   art-train \
-    --config configs/training.yaml \
-    --defenses configs/ablations/defenses_eps_fixed_8.yaml \
-    --data configs/data.yaml \
-    --gold configs/gold.yaml \
-    --full-ft configs/full_ft.yaml \
-    --model qwen2_5_vl_7b \
-    --run-dir runs/qwen_abl_eps_fixed_seed${SEED} \
-    --seed ${SEED}
+    --config       configs/training.yaml \
+    --defenses     configs/ablations/defenses_eps_fixed_8.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        qwen2_5_vl_7b \
+    --run-dir      runs/qwen_abl_eps_fixed_seed${SEED} \
+    --device       cuda \
+    --seed         ${SEED} \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 done
 ```
 
@@ -417,32 +528,37 @@ with paired delta vs reference cell + significance markers.
 # Headline 5-seed sweep.
 for SEED in 0 1 2 3 4; do
   art-train \
-    --config configs/training.yaml \
-    --defenses configs/defenses.yaml \
-    --data configs/data.yaml \
-    --gold configs/gold.yaml \
-    --full-ft configs/full_ft.yaml \
-    --model llava_v1_6_mistral_7b \
-    --run-dir runs/llava_main_seed${SEED} \
-    --seed ${SEED}
+    --config       configs/training.yaml \
+    --defenses     configs/defenses.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        llava_v1_6_mistral_7b \
+    --run-dir      runs/llava_main_seed${SEED} \
+    --device       cuda \
+    --seed         ${SEED} \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 done
 
 # Loss-family ablation only (3 cells × 5 seeds).
 for LOSS in trades pgd_at oaat; do
   for SEED in 0 1 2 3 4; do
     art-train \
-      --config configs/ablations/loss_${LOSS}.yaml \
-      --defenses configs/defenses.yaml \
-      --data configs/data.yaml \
-      --gold configs/gold.yaml \
-      --full-ft configs/full_ft.yaml \
-      --model llava_v1_6_mistral_7b \
-      --run-dir runs/llava_abl_loss_${LOSS}_seed${SEED} \
-      --seed ${SEED}
+      --config       configs/ablations/loss_${LOSS}.yaml \
+      --defenses     configs/defenses.yaml \
+      --data         configs/data.yaml \
+      --gold         configs/gold.yaml \
+      --full-ft      configs/full_ft.yaml \
+      --model        llava_v1_6_mistral_7b \
+      --run-dir      runs/llava_abl_loss_${LOSS}_seed${SEED} \
+      --device       cuda \
+      --seed         ${SEED} \
+      --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
   done
 done
 
-# Plus baseline_llava records and per-seed defended records (same shape as Phase 0e).
+# Plus baseline_llava records + per-seed defended records (same shape as Phase 0e
+# and Phase 1 runner block; swap --config configs/experiments/{baseline,defended}_llava.yaml).
 ```
 
 ---
@@ -456,16 +572,18 @@ paper appendix.
 ```bash
 for SEED in 0 1 2 3 4; do
   art-train \
-    --config configs/training.yaml \
-    --defenses configs/defenses.yaml \
-    --data configs/data.yaml \
-    --gold configs/gold.yaml \
-    --full-ft configs/full_ft.yaml \
-    --model llama_3_2_vision_11b \
-    --run-dir runs/llama_main_seed${SEED} \
-    --seed ${SEED}
+    --config       configs/training.yaml \
+    --defenses     configs/defenses.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        llama_3_2_vision_11b \
+    --run-dir      runs/llama_main_seed${SEED} \
+    --device       cuda \
+    --seed         ${SEED} \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 done
-# Loss-family ablation block identical to Phase 3, --model swapped.
+# Loss-family ablation block identical to Phase 3, --model swapped to llama_3_2_vision_11b.
 ```
 
 ---
@@ -478,17 +596,17 @@ python scripts/figures/make_figures.py \
   --aggregate results/qwen_main/aggregate.json \
               results/llava_main/aggregate.json \
               results/llama_main/aggregate.json \
-  --out figures/fig_headline_3model.png
+  --out       figures/fig_headline_3model.png
 
 # Ablation tables (Qwen).
 # > ⚠️ Not yet in repo: `scripts/figures/make_ablation_tables.py`.
 # > Expected interface: `--inputs <aggregate.json>... --out <*.tex>`.
 python scripts/figures/make_ablation_tables.py \
-  --inputs results/qwen_abl_loss/aggregate.json \
-           results/qwen_abl_beta/aggregate.json \
-           results/qwen_abl_freeze/aggregate.json \
-           results/qwen_abl_eps/aggregate.json \
-  --out tables/qwen_ablations.tex
+  --inputs  results/qwen_abl_loss/aggregate.json \
+            results/qwen_abl_beta/aggregate.json \
+            results/qwen_abl_freeze/aggregate.json \
+            results/qwen_abl_eps/aggregate.json \
+  --out     tables/qwen_ablations.tex
 
 # Compute transparency report (H200 hours, peak GiB).
 # > ⚠️ Not yet in repo: `scripts/figures/compute_summary.py`.
@@ -496,7 +614,7 @@ python scripts/figures/make_ablation_tables.py \
 # > emit a LaTeX table.
 python scripts/figures/compute_summary.py \
   --runs runs/ \
-  --out tables/compute.tex
+  --out  tables/compute.tex
 ```
 
 ---
