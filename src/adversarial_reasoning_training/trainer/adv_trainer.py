@@ -243,6 +243,9 @@ class AdvTrainer:
                         })
 
                     if self.config.save_every > 0 and global_step % self.config.save_every == 0:
+                        # Periodic cadence: weights-only to avoid 50+ GB
+                        # writes per save during long training runs.
+                        # Final save below preserves optimizer for resume.
                         self.ckpt.save(
                             model=self.model,
                             optimizer=self.optimizer,
@@ -250,6 +253,7 @@ class AdvTrainer:
                             epoch=epoch,
                             metric_value=None,
                             extra={"reason": "save_every"},
+                            include_optimizer=False,
                         )
 
                     if self.config.eval_every > 0 and global_step % self.config.eval_every == 0:

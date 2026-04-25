@@ -48,8 +48,16 @@ class CheckpointRegistry:
         epoch: int,
         metric_value: float | None,
         extra: dict[str, Any] | None = None,
+        include_optimizer: bool = True,
     ) -> Path:
-        """Save a new checkpoint as `latest` and — if metric improved — as `best`."""
+        """Save a new checkpoint as `latest` and — if metric improved — as `best`.
+
+        ``include_optimizer=False`` writes a weights-only checkpoint (model
+        state_dict + scalar metadata, no optimizer m/v state). Used for the
+        periodic ``save_every`` cadence so frequent saves don't blow disk;
+        end-of-fit and best-on-eval saves still include the optimizer for
+        full-state resume.
+        """
         ts = time.strftime("%Y%m%d-%H%M%S")
         stem = f"step{step:07d}-ep{epoch:02d}-{ts}"
         latest = self.ckpt_dir / f"{stem}.pt"
@@ -60,7 +68,7 @@ class CheckpointRegistry:
             "metric_value": metric_value,
             "extra": extra or {},
         }
-        if optimizer is not None:
+        if include_optimizer and optimizer is not None:
             payload["optim_state_dict"] = optimizer.state_dict()
         torch.save(payload, latest)
         self._rm_old_latest(latest)
