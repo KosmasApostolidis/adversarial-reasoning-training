@@ -17,6 +17,10 @@ from adversarial_reasoning_training.eval.robust_eval import (
 from adversarial_reasoning_training.gates.T3_robust import T3Thresholds, run_t3
 
 
+def _toolcall(step: int, name: str, args: dict) -> dict:
+    return {"step": step, "name": name, "args": args, "result": None, "error": None}
+
+
 def _record(
     sample_id: str,
     epsilon: float,
@@ -28,7 +32,29 @@ def _record(
     *,
     attack_mode: str = "pgd",
     seed: int = 0,
+    benign_calls: list[dict] | None = None,
+    attacked_calls: list[dict] | None = None,
 ) -> dict:
+    benign_node: dict = {
+        "task_id": "t",
+        "model_id": "m",
+        "seed": seed,
+        "tool_sequence": benign_seq,
+        "final_answer": benign_answer,
+        "metadata": {},
+    }
+    attacked_node: dict = {
+        "task_id": "t",
+        "model_id": "m",
+        "seed": seed,
+        "tool_sequence": attacked_seq,
+        "final_answer": attacked_answer,
+        "metadata": {},
+    }
+    if benign_calls is not None:
+        benign_node["tool_calls"] = benign_calls
+    if attacked_calls is not None:
+        attacked_node["tool_calls"] = attacked_calls
     return {
         "model_key": "m",
         "task_id": "t",
@@ -37,22 +63,8 @@ def _record(
         "attack_mode": attack_mode,
         "epsilon": epsilon,
         "seed": seed,
-        "benign": {
-            "task_id": "t",
-            "model_id": "m",
-            "seed": seed,
-            "tool_sequence": benign_seq,
-            "final_answer": benign_answer,
-            "metadata": {},
-        },
-        "attacked": {
-            "task_id": "t",
-            "model_id": "m",
-            "seed": seed,
-            "tool_sequence": attacked_seq,
-            "final_answer": attacked_answer,
-            "metadata": {},
-        },
+        "benign": benign_node,
+        "attacked": attacked_node,
         "edit_distance_norm": edit_distance_norm,
         "elapsed_s": 1.0,
     }
@@ -62,7 +74,7 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.write_text("".join(json.dumps(r) + "\n" for r in records))
 
 
-def test_records_to_per_sample_preserves_three_metrics(tmp_path: Path) -> None:
+def test_records_to_per_sample_preserves_all_metrics(tmp_path: Path) -> None:
     records = [
         _record("s1", 0.0078, 0.5, ["a", "b"], ["a", "b"], "yes", "yes"),
         _record("s2", 0.0078, 0.0, ["x"], ["x"], "ok", "ok"),
@@ -76,6 +88,7 @@ def test_records_to_per_sample_preserves_three_metrics(tmp_path: Path) -> None:
     assert per_sample["tool_name_acc"] == [1.0, 1.0]
     assert per_sample["answer_em"] == [1.0, 1.0]
     assert per_sample["traj_edit_distance"] == pytest.approx([0.5, 1.0])
+    assert per_sample["args_iou"] == []
 
 
 def test_traj_edit_distance_is_similarity_higher_is_better(tmp_path: Path) -> None:
@@ -138,6 +151,7 @@ def test_handles_empty_jsonl(tmp_path: Path) -> None:
 def test_save_per_sample_round_trips(tmp_path: Path) -> None:
     per_sample = {
         "tool_name_acc": [1.0, 0.0, 1.0],
+        "args_iou": [1.0, 0.5, 0.0],
         "answer_em": [0.0, 0.0, 1.0],
         "traj_edit_distance": [0.5, 0.25, 0.9],
     }
@@ -146,6 +160,77 @@ def test_save_per_sample_round_trips(tmp_path: Path) -> None:
 
     loaded = json.loads(out.read_text())
     assert loaded == per_sample
+
+
+def test_args_iou_perfect_match_with_full_calls(tmp_path: Path) -> None:
+    benign_calls = [
+        _toolcall(0, "search", {"q": "x"}),
+        _toolcall(1, "lookup", {"id": 7}),
+    ]
+    attacked_calls = [
+        _toolcall(0, "search", {"q": "x"}),
+        _toolcall(1, "lookup", {"id": 7}),
+    ]
+    rec = _record(
+        "s1", 0.0078, 0.0, ["search", "lookup"], ["search", "lookup"], "ok", "ok",
+        benign_calls=benign_calls, attacked_calls=attacked_calls,
+    )
+    path = tmp_path / "records.jsonl"
+    _write_jsonl(path, [rec])
+
+    per_sample = records_to_per_sample(path)
+
+    assert per_sample["args_iou"] == [1.0]
+
+
+def test_args_iou_jaccard_math(tmp_path: Path) -> None:
+    benign_calls = [_toolcall(0, "f", {"a": 1, "b": 2})]
+    attacked_calls = [_toolcall(0, "f", {"a": 1, "c": 3})]
+    rec = _record(
+        "s1", 0.0078, 0.0, ["f"], ["f"], "ok", "ok",
+        benign_calls=benign_calls, attacked_calls=attacked_calls,
+    )
+    path = tmp_path / "records.jsonl"
+    _write_jsonl(path, [rec])
+
+    per_sample = records_to_per_sample(path)
+
+    # {(a,1),(b,2)} ∩ {(a,1),(c,3)} = {(a,1)}; ∪ size 3 → 1/3
+    assert per_sample["args_iou"] == pytest.approx([1.0 / 3.0])
+
+
+def test_args_iou_dropped_when_old_schema(tmp_path: Path) -> None:
+    """Records lacking tool_calls produce NaN args_iou, which _drop_nan_metrics
+    empties so T3 trips its missing-metric branch."""
+    rec = _record("s1", 0.0078, 0.0, ["a"], ["a"], "x", "x")
+    path = tmp_path / "records.jsonl"
+    _write_jsonl(path, [rec])
+
+    per_sample = records_to_per_sample(path)
+
+    assert per_sample["args_iou"] == []
+    assert per_sample["tool_name_acc"] == [1.0]
+
+
+def test_args_iou_paired_steps_average(tmp_path: Path) -> None:
+    benign_calls = [
+        _toolcall(0, "f", {"a": 1}),
+        _toolcall(1, "g", {"b": 2}),
+    ]
+    attacked_calls = [
+        _toolcall(0, "f", {"a": 1}),       # IoU 1.0
+        _toolcall(1, "g", {"b": 99}),       # IoU 0.0 (different repr)
+    ]
+    rec = _record(
+        "s1", 0.0078, 0.0, ["f", "g"], ["f", "g"], "ok", "ok",
+        benign_calls=benign_calls, attacked_calls=attacked_calls,
+    )
+    path = tmp_path / "records.jsonl"
+    _write_jsonl(path, [rec])
+
+    per_sample = records_to_per_sample(path)
+
+    assert per_sample["args_iou"] == pytest.approx([0.5])
 
 
 def test_t3_pass_end_to_end_under_clean_robustness(tmp_path: Path) -> None:
