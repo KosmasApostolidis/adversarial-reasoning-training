@@ -1,0 +1,34 @@
+# Outer training loop configuration.
+#
+# Defense selector picks the loss formulation:
+#   trades  : L = task_ce(clean) + beta * KL(clean || adv)
+#   pgd_at  : L = task_ce(adv)
+#   oaat    : L = alpha * task_ce(clean) + (1-alpha) * task_ce(adv)
+
+defense: trades             # trades | pgd_at | oaat
+seed: 0
+
+epochs: 1
+micro_batch: 1
+grad_accum: 8               # effective batch size = 8
+
+optim: adamw8bit            # adamw8bit | adamw | adamw_fused
+lr:
+  lm: 5.0e-6
+  projector: 1.0e-5
+  vit: 1.0e-6
+weight_decay: 0.0
+betas: [0.9, 0.999]
+
+schedule: cosine            # cosine | linear | constant
+warmup_pct: 0.03
+
+grad_ckpt: true
+amp: bf16                   # bf16 | fp16 | fp32
+grad_clip_norm: 1.0
+
+log_every: 20
+eval_every: 200
+ckpt_keep: 2                # registry keeps best + latest
+
+metric_for_best: tool_name_acc
