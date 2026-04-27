@@ -5,7 +5,11 @@ Runnable command sheet for the publication-readiness program described in
 each phase below is launched manually by the user.
 
 Target venue: top-tier conference (NeurIPS / ICLR / CVPR-tier).
-Model scope: `qwen2_5_vl_7b`, `llava_v1_6_mistral_7b`, `llama_3_2_vision_11b`.
+Model scope: `qwen2_5_vl_7b`, `llava_v1_6_mistral_7b`, `internvl2_8b`
+(third-model slot; was `llama_3_2_vision_11b` — swapped to the open-access
+13B Vicuna LLaVA-Next variant after Meta withheld the gated-repo grant.
+Llama remains in `models.yaml` and `model_registry_id()` for users who
+later acquire the license).
 Seeds per cell: 5 (`SEED ∈ {0,1,2,3,4}`).
 
 ---
@@ -113,6 +117,59 @@ Data: ProstateX preprocessed bundle at the path declared in
 Models: Hugging Face cache populated for `qwen2_5_vl_7b`,
 `llava_v1_6_mistral_7b`, `llama_3_2_vision_11b`. Registry in
 `../adversarial-reasoning-attacks/configs/models.yaml`.
+
+**Llama gated-access prerequisite.** `meta-llama/Llama-3.2-11B-Vision-Instruct`
+is a gated repo; **any** Phase 4 invocation (T0/T1/baseline/adv-FT/T3) fails
+with `Cannot access gated repo for url …` until the running HF account has
+the Meta license grant *and* a token with that grant in cache:
+
+```bash
+# 1. Visit the model page and request access (Meta gates this manually).
+#    https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct
+# 2. Wait for the approval email (typically minutes-to-hours).
+# 3. Login with a token that has read access to gated repos.
+huggingface-cli login                 # paste a token from huggingface.co/settings/tokens
+# 4. Verify the token resolves the gated config.json:
+python -c "from huggingface_hub import HfApi; \
+  print(HfApi().model_info('meta-llama/Llama-3.2-11B-Vision-Instruct').siblings[0])"
+```
+
+Until step 4 returns without HTTP 401/403, **skip Phase 4 entirely** — the
+pipeline driver (`scripts/run_pipeline.sh --models qwen,llava`) is the
+intended workaround.
+
+**Already-trained ckpts are auto-skipped.** `scripts/run_pipeline.sh
+--skip-existing` reads `runs/<model>_main_seed<N>/ckpt/index.json`
+(`latest_path` / `best_path`) before re-launching `art-train`. A 0-byte
+records.jsonl from a crashed prior run is treated as missing and forces a
+regen — the size check uses `-s`, not `-e`.
+
+**Defended-model hf_dir conversion (required before T3).** Phase T3 robust-eval
+loads a defended model via the `defended_<model>_*` entry in
+`../adversarial-reasoning-attacks/configs/models.yaml`, which points at a
+self-contained HF dir at `runs/adv1_<alias>/ckpt/hf_dir`. After
+`art-train` writes the seed ckpts, materialise that dir via the two-step
+re-save:
+
+```bash
+# 1. Strip optimizer + EMA state; emit a weights-only .pt blob.
+python scripts/resave_ckpt_weights_only.py \
+  --src runs/qwen_main_seed0/ckpt/step0000030-ep05-*.pt \
+  --dst runs/adv1_qwen/ckpt/weights_only.pt
+
+# 2. Materialise the HF dir referenced by defended_qwen2_5_vl_7b.hf_id.
+python scripts/ckpt_to_hf_dir.py \
+  --base   Qwen/Qwen2.5-VL-7B-Instruct \
+  --ckpt   runs/adv1_qwen/ckpt/weights_only.pt \
+  --out-dir runs/adv1_qwen/ckpt/hf_dir
+
+# Repeat with --base llava-hf/llava-v1.6-mistral-7b-hf and runs/adv1_llava/...
+# Repeat with --base meta-llama/Llama-3.2-11B-Vision-Instruct and runs/adv1_llama/...
+```
+
+Until `runs/adv1_<alias>/ckpt/hf_dir/` exists, `defended_<alias>_*` entries
+in `models.yaml` will fail to load with `HFValidationError` and the T3 phase
+will WARN-skip for that model.
 
 ---
 
@@ -563,11 +620,35 @@ done
 
 ---
 
-## Phase 4 — Llama-3.2-Vision-11B replication
+## Phase 4 — InternVL2-8B replication
 
-Same shape as Phase 3, swap `--model llama_3_2_vision_11b`. Expect ~1.5×
-wall-time per run; document any bf16-only / batch-size deviations in the
+Same shape as Phase 3, swap `--model internvl2_8b`. Expect comparable
+wall-time per run to the 7B llava (8B InternLM-2 LM backbone +
+InternViT-300M vision encoder). Document any
+bf16-only / batch-size / tile-budget (`max_tiles`) deviations in the
 paper appendix.
+
+**Why this model in the third slot.**
+`meta-llama/Llama-3.2-11B-Vision-Instruct` is a manually-gated repo and
+the running HF account did not get the Meta license grant.
+`llava_v1_6_vicuna_13b` shares the `llava_next` family wrapper with the
+existing 7B `llava_v1_6_mistral_7b` — only the LM backbone differs, so
+it gives no architectural diversity for cross-family robustness claims.
+`OpenGVLab/InternVL2-8B` is open-access, ungated, and uses both a
+distinct LM backbone (InternLM-2-7B) and a distinct vision encoder
+(InternViT-300M) vs the two incumbents — true cross-family signal at
+comparable parameter count. Lives behind a new `internvl2` family
+wrapper at
+`adversarial-reasoning-attacks/src/adversarial_reasoning/models/internvl2.py`.
+
+The previous third slots are still wired:
+- `llama` (alias in `model_registry_id()`) → opt in with the Meta grant.
+- `llava13b` (alias) → opt in to reproduce earlier same-family runs.
+
+**Prerequisite (one-time).** First run downloads ~16 GB to
+`~/.cache/huggingface`. InternVL2 ships custom modeling code; load via
+`AutoModel.from_pretrained(..., trust_remote_code=True)` is wired in
+the family wrapper — no env-var or login step needed.
 
 ```bash
 for SEED in 0 1 2 3 4; do
@@ -577,13 +658,16 @@ for SEED in 0 1 2 3 4; do
     --data         configs/data.yaml \
     --gold         configs/gold.yaml \
     --full-ft      configs/full_ft.yaml \
-    --model        llama_3_2_vision_11b \
-    --run-dir      runs/llama_main_seed${SEED} \
+    --model        internvl2_8b \
+    --run-dir      runs/internvl2_main_seed${SEED} \
     --device       cuda \
     --seed         ${SEED} \
     --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 done
-# Loss-family ablation block identical to Phase 3, --model swapped to llama_3_2_vision_11b.
+# Loss-family ablation block identical to Phase 3, --model swapped to internvl2_8b.
+
+# Baseline + defended records (same shape as Phase 0e / Phase 3):
+#   --config configs/experiments/{baseline,defended}_internvl2.yaml
 ```
 
 ---
@@ -591,11 +675,13 @@ done
 ## Phase 5 — Paper artifacts (no training)
 
 ```bash
-# Headline 3-model figure.
+# Headline 3-model figure (default lineup: qwen + llava-7b + internvl2-8b).
+# Swap internvl2_main → llama_main if you instead trained the gated Llama variant,
+# or → llava13b_main to reproduce the prior same-family LLaVA-Vicuna-13B run.
 python scripts/figures/make_figures.py \
   --aggregate results/qwen_main/aggregate.json \
               results/llava_main/aggregate.json \
-              results/llama_main/aggregate.json \
+              results/internvl2_main/aggregate.json \
   --out       figures/fig_headline_3model.png
 
 # Ablation tables (Qwen).
@@ -641,3 +727,159 @@ before Phase 2:** multi-GPU, reduced epoch budget, or 3-seed ablation cells
 - Defense-aware adaptive attackers
 - Non-PGD attack families (AutoAttack, BPDA, etc.)
 - Tasks beyond ProstateX medical-imaging VLM agent setup
+
+---
+
+## Phase R — Restoration runs (llava + llava13b)
+
+The last full pipeline run failed with three errors that all trace to two
+root causes: (a) the manual `ckpt_to_hf_dir.py` export step was never run
+for any of the three models, so `runs/adv1_<alias>/ckpt/hf_dir` is missing
+and the defended-attack runner crashes inside transformers; and (b) T0/T1
+gates plus adv-FT training were never completed for `llava` or `llava13b`.
+This section documents the operational steps to restore both models.
+`scripts/run_pipeline.sh` now calls `assert_hf_dir <alias>` before the
+defended-attack runner; missing exports surface as a `PIPELINE_FAILURES`
+entry instead of an OSError mid-load.
+
+### ⚠ Decision required before running these (per-seed defended evals)
+
+`adversarial_reasoning.runner` does **not** accept `--seed`; each
+`configs/experiments/defended_<alias>.yaml` hardcodes `seeds: [0]`; and
+`run_pipeline.sh` only overrides `--out`. Therefore launching the per-seed
+defended attack five times (seed0…seed4) currently produces five identical
+records.jsonl files. The aggregate would average degenerate copies and the
+"5-seed defended variance" in the headline figure would be fake.
+
+Pick one before re-running anything below:
+- **Option 1:** add a `--seed` CLI flag to `runner.py` (attacks repo) and
+  pass `--seed $seed` per loop iteration in the pipeline.
+- **Option 2:** replace `seeds: [0]` in each `defended_<alias>.yaml` with
+  `[0, 1, 2, 3, 4]` and let the runner iterate; drop the per-seed `--out`
+  in favour of subdirs the runner creates.
+- **Option 3:** declare the defended eval seed-invariant by design and
+  average over data seeds only — but then drop "5-seed defended variance"
+  language from the report and tables.
+
+The training-side adv-FT seeds (R3 below) are already real per-seed runs;
+this decision only affects the attack-side defended records.
+
+### R1. T0 + T1 gates (llava, llava13b)
+
+```bash
+cd /home/medadmin/kosmasapostolidis/adversarial-reasoning-training
+
+# llava (mistral-7b)
+python -m adversarial_reasoning_training.gates.T0_env \
+  --model      llava_v1_6_mistral_7b \
+  --defenses   configs/defenses.yaml \
+  --data       configs/data.yaml \
+  --gold       configs/gold.yaml \
+  --full-ft    configs/full_ft.yaml \
+  --device     cuda \
+  --epsilon    0.01568627 \
+  --pgd-steps  3 \
+  --out        runs/t0_llava/T0.json
+
+python -m adversarial_reasoning_training.gates.T1_clean \
+  --model              llava_v1_6_mistral_7b \
+  --training           configs/training.yaml \
+  --data               configs/data.yaml \
+  --gold               configs/gold.yaml \
+  --full-ft            configs/full_ft.yaml \
+  --device             cuda \
+  --max-steps          200 \
+  --grad-accum         8 \
+  --tool-name-acc-min  0.85 \
+  --answer-em-min      0.70 \
+  --out                runs/t1_llava/gates/T1.json
+
+# llava13b (vicuna-13b)
+python -m adversarial_reasoning_training.gates.T0_env \
+  --model      llava_v1_6_vicuna_13b \
+  --defenses   configs/defenses.yaml \
+  --data       configs/data.yaml \
+  --gold       configs/gold.yaml \
+  --full-ft    configs/full_ft.yaml \
+  --device     cuda \
+  --epsilon    0.01568627 \
+  --pgd-steps  3 \
+  --out        runs/t0_llava13b/T0.json
+
+python -m adversarial_reasoning_training.gates.T1_clean \
+  --model              llava_v1_6_vicuna_13b \
+  --training           configs/training.yaml \
+  --data               configs/data.yaml \
+  --gold               configs/gold.yaml \
+  --full-ft            configs/full_ft.yaml \
+  --device             cuda \
+  --max-steps          200 \
+  --grad-accum         8 \
+  --tool-name-acc-min  0.85 \
+  --answer-em-min      0.70 \
+  --out                runs/t1_llava13b/gates/T1.json
+```
+
+### R2. Adv-FT (llava, llava13b — seeds 0..4)
+
+```bash
+# llava (mistral-7b) — repeat for SEED in 0 1 2 3 4
+for SEED in 0 1 2 3 4; do
+  art-train \
+    --config       configs/training.yaml \
+    --defenses     configs/defenses.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        llava_v1_6_mistral_7b \
+    --run-dir      runs/llava_main_seed${SEED} \
+    --device       cuda \
+    --seed         "${SEED}" \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
+done
+
+# llava13b (vicuna-13b) — repeat for SEED in 0 1 2 3 4
+for SEED in 0 1 2 3 4; do
+  art-train \
+    --config       configs/training.yaml \
+    --defenses     configs/defenses.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        llava_v1_6_vicuna_13b \
+    --run-dir      runs/llava13b_main_seed${SEED} \
+    --device       cuda \
+    --seed         "${SEED}" \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
+done
+```
+
+### R3. Export `adv1_<alias>/ckpt/hf_dir` (all three models)
+
+`assert_hf_dir` in `scripts/run_pipeline.sh` checks for
+`config.json` + `preprocessor_config.json` under each path. The defended
+runner cannot proceed without these. Use the seed-0 checkpoint as the
+canonical export.
+
+```bash
+cd /home/medadmin/kosmasapostolidis/adversarial-reasoning-training
+
+# qwen
+python scripts/ckpt_to_hf_dir.py \
+  --src runs/qwen_main_seed0/ckpt \
+  --dst runs/adv1_qwen/ckpt/hf_dir
+
+# llava
+python scripts/ckpt_to_hf_dir.py \
+  --src runs/llava_main_seed0/ckpt \
+  --dst runs/adv1_llava/ckpt/hf_dir
+
+# llava13b
+python scripts/ckpt_to_hf_dir.py \
+  --src runs/llava13b_main_seed0/ckpt \
+  --dst runs/adv1_llava13b/ckpt/hf_dir
+```
+
+After export, rerun `scripts/run_pipeline.sh` end-to-end. The seed-degeneracy
+decision above must be resolved before treating the resulting "5-seed
+defended" rows as real.

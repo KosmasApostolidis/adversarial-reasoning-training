@@ -152,6 +152,28 @@ skip_if_exists() {
   return 0
 }
 
+# Verify the HF-format export of an adv-FT checkpoint exists before the
+# defended-attack runner is launched. attacks/configs/models.yaml hardcodes
+# defended_<alias>.hf_id to runs/adv1_<alias>/ckpt/hf_dir; that directory
+# is produced by scripts/ckpt_to_hf_dir.py, not by the pipeline. Without
+# this check the runner crashes inside transformers with an OSError mid
+# model-load and (per the open-before-load bug in
+# adversarial-reasoning-attacks/runner.py) leaves a 0-byte records.jsonl
+# that downstream T3 / aggregate then silently consume.
+assert_hf_dir() {
+  local alias="$1"
+  local dir="runs/adv1_${alias}/ckpt/hf_dir"
+  local missing=()
+  for required in config.json preprocessor_config.json; do
+    [[ -s "${dir}/${required}" ]] || missing+=("${required}")
+  done
+  if (( ${#missing[@]} > 0 )); then
+    echo "FAIL [adv1_${alias}/hf_dir]: missing ${missing[*]} under ${dir}" >&2
+    echo "       export the seed0 ckpt first: python scripts/ckpt_to_hf_dir.py --src runs/${alias}_main_seed0/ckpt --dst ${dir}" >&2
+    return 1
+  fi
+}
+
 # Resolve the trained ckpt path for a run. The trainer writes
 #   ckpt/index.json   ->  {"latest_path": "...", "best_path": null|"..."}
 # and the actual blob is ckpt/step*-ep*.pt (best.pt only exists when best
@@ -418,6 +440,8 @@ run_one_seed() {
 
   if phase_enabled t3; then
     if skip_if_exists "$DEFENDED_RECORDS"; then
+      assert_hf_dir "$ALIAS" \
+        || { echo "FAIL [${ALIAS}/seed${SEED}]: defended-eval prerequisite missing" >&2; return 1; }
       run_sh "cd '$ATTACKS_DIR' && python -m adversarial_reasoning.runner \
         --config         configs/experiments/defended_${ALIAS}.yaml \
         --attacks-config configs/attacks.yaml \
