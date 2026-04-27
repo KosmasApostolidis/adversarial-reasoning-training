@@ -1,25 +1,19 @@
 """Render result figures from runs/ artifacts.
 
-Reads:
-  runs/smoke/train_log.jsonl        (per-step metrics + fit_done)
-  runs/t0/gates/T0.json             (env-gate verdict)
-  runs/t1/gates/T1.json             (clean-FT-gate verdict)
-  runs/<id>/gates/baseline_per_sample.json   (optional)
-  runs/<id>/gates/defended_per_sample.json   (optional)
-  runs/<id>/gates/T3.json                    (optional)
+Two modes:
 
-Writes:
-  figures/fig01_smoke_loss.png
-  figures/fig02_smoke_grad_mem.png
-  figures/fig03_smoke_attack.png
-  figures/fig04_gates_summary.png
-  figures/fig05_robust_comparison.png  (if T3 inputs present)
+* ``legacy`` (default): walk ``--runs-dir`` for T0/T1 + per-run T3 inputs and
+  emit ``fig04_gates_summary.png`` + per-run ``fig05_robust_comparison_*.png``.
+* ``--aggregate``: render the headline 3-model bar chart from one or more
+  ``aggregate.json`` files produced by ``aggregate_seeds.py`` and write it to
+  ``--out``.
 
-Note: ``figures/`` is gitignored; this script regenerates everything from the
-tracked configs and the on-disk runs/ artifacts.
+The two modes are mutually compatible — ``run_pipeline.sh`` calls the
+aggregate mode in Phase 5; the legacy mode stays for ad-hoc inspection.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sys
@@ -31,8 +25,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNS = ROOT / "runs"
-OUT = ROOT / "figures"
 
 PLT_RC = {
     "figure.dpi": 130,
@@ -43,86 +35,32 @@ PLT_RC = {
     "axes.spines.right": False,
 }
 
-
-def load_jsonl(path: Path) -> list[dict]:
-    rows = []
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if line:
-            rows.append(json.loads(line))
-    return rows
+HEADLINE_METRICS = (
+    ("T3.tool_name_acc_delta", "Δ Tool acc"),
+    ("T3.args_iou_delta", "Δ Args IoU"),
+    ("T3.answer_em_delta", "Δ Answer EM"),
+    ("T3.traj_edit_distance_delta", "Δ Traj edit dist"),
+)
 
 
-def load_json_lenient(path: Path) -> dict:
-    text = path.read_text().replace("NaN", "null")
-    return json.loads(text)
+def load_json_lenient(path: Path) -> dict | None:
+    """Read JSON tolerating bare ``NaN`` tokens. Returns None for
+    missing OR corrupt files; callers must guard.
+    """
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text().replace("NaN", "null")
+        return json.loads(text)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"WARN: skipping corrupt JSON at {path}: {exc}", file=sys.stderr)
+        return None
 
 
 def fmt_clean(value) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "NaN"
     return f"{value:.3f}"
-
-
-def render_loss_curve(train_steps: list[dict], fit_done: dict, out_path: Path) -> None:
-    steps = [r["global_step"] for r in train_steps]
-    fig, ax = plt.subplots(figsize=(7, 4.2))
-    ax.plot(steps, [r["loss_total"] for r in train_steps], "o-", lw=2, label="loss_total", color="#0b6efd")
-    ax.plot(steps, [r["loss_task"] for r in train_steps], "s--", lw=1.6, label="loss_task", color="#6f42c1")
-    ax2 = ax.twinx()
-    ax2.plot(steps, [r["loss_kl"] for r in train_steps], "^:", lw=1.6, label="loss_kl (right)", color="#198754")
-    ax.set_xlabel("global_step")
-    ax.set_ylabel("loss (task / total)")
-    ax2.set_ylabel("loss_kl")
-    ax.set_xticks(steps)
-    ax.set_title(f"Smoke training — loss curves (β=6.0, {fit_done['wall_s']:.1f}s wall)")
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines + lines2, labels + labels2, loc="upper right")
-    fig.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
-
-
-def render_grad_mem(train_steps: list[dict], out_path: Path) -> None:
-    steps = [r["global_step"] for r in train_steps]
-    fig, ax = plt.subplots(figsize=(7, 4.2))
-    ax.bar(steps, [r["grad_norm"] for r in train_steps], color="#fd7e14", alpha=0.75, label="grad_norm")
-    ax.set_ylabel("grad_norm")
-    ax.set_xlabel("global_step")
-    ax.set_xticks(steps)
-    ax2 = ax.twinx()
-    ax2.plot(steps, [r["peak_allocated_gb"] for r in train_steps], "o-", color="#0b6efd", label="peak_allocated_gb")
-    ax2.plot(steps, [r["peak_reserved_gb"] for r in train_steps], "s--", color="#dc3545", label="peak_reserved_gb")
-    ax2.set_ylabel("GPU memory (GiB)")
-    ax2.axhline(120.0, ls=":", color="#6c757d", lw=1, label="OOM limit (120 GiB)")
-    ax.set_title("Smoke training — gradient norm & GPU memory")
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines + lines2, labels + labels2, loc="upper right", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
-
-
-def render_attack(train_steps: list[dict], out_path: Path) -> None:
-    steps = [r["global_step"] for r in train_steps]
-    fig, ax = plt.subplots(figsize=(7, 4.2))
-    ax.plot(steps, [r["attack_loss_final"] for r in train_steps], "o-", lw=2, color="#dc3545", label="attack_loss_final")
-    ax.axhline(0, ls="--", color="#6c757d", lw=1)
-    ax2 = ax.twinx()
-    ax2.bar(steps, [r["attack_iterations"] for r in train_steps], alpha=0.3, color="#0b6efd", label="attack_iterations")
-    ax.set_xlabel("global_step")
-    ax.set_ylabel("attack_loss_final  (lower = stronger attack)")
-    ax2.set_ylabel("attack_iterations")
-    ax.set_xticks(steps)
-    ax.set_title(f"Adversary — APGD inner loop (ε={train_steps[0]['epsilon']})")
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines + lines2, labels + labels2, loc="upper right")
-    fig.tight_layout()
-    fig.savefig(out_path, bbox_inches="tight")
-    plt.close(fig)
 
 
 def render_gates(t0: dict, t1: dict, out_path: Path) -> None:
@@ -164,7 +102,7 @@ def render_gates(t0: dict, t1: dict, out_path: Path) -> None:
     )
 
     fig.suptitle(
-        "Gate summary — T0 (env smoke) + T1 (clean fine-tune)",
+        "Gate summary — T0 (env sanity) + T1 (clean fine-tune)",
         y=1.02, fontsize=12, fontweight="bold",
     )
     fig.tight_layout()
@@ -214,7 +152,7 @@ def render_robust_comparison(
         [max(0.0, deltas[i] - ci_lo[i]) for i in range(len(metrics))],
         [max(0.0, ci_hi[i] - deltas[i]) for i in range(len(metrics))],
     ]
-    bars = ax.bar(x, deltas, yerr=yerr, capsize=4, color="#4c72b0", alpha=0.85)
+    ax.bar(x, deltas, yerr=yerr, capsize=4, color="#4c72b0", alpha=0.85)
     for i, metric in enumerate(metrics):
         if metric in significant:
             ax.text(
@@ -241,6 +179,94 @@ def render_robust_comparison(
     plt.close(fig)
 
 
+def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
+    """Headline figure: per-model Δ bars over T3 metrics with bootstrap CIs.
+
+    Each ``aggregates`` entry is one ``aggregate.json`` (one model).
+    Group label is the directory name minus the trailing ``_main`` suffix
+    so ``results/qwen_main/aggregate.json`` → ``qwen``.
+    """
+    if not aggregates:
+        print("ERROR: --aggregate requires at least one path", file=sys.stderr)
+        return 1
+    payloads: list[tuple[str, dict]] = []
+    missing: list[Path] = []
+    for path in aggregates:
+        if not path.exists():
+            print(f"WARN: missing aggregate (skipping): {path}", file=sys.stderr)
+            missing.append(path)
+            continue
+        agg = load_json_lenient(path)
+        if agg is None:
+            # Corrupt JSON — load_json_lenient already logged the cause.
+            missing.append(path)
+            continue
+        label = path.parent.name
+        if label.endswith("_main"):
+            label = label[:-5]
+        payloads.append((label, agg))
+    if not payloads:
+        print(
+            f"ERROR: no aggregates available — all {len(aggregates)} paths missing",
+            file=sys.stderr,
+        )
+        return 1
+    if missing:
+        print(
+            f"NOTE: rendering with {len(payloads)}/{len(aggregates)} models "
+            f"(missing: {', '.join(str(p) for p in missing)})",
+            file=sys.stderr,
+        )
+
+    metric_keys = [k for k, _ in HEADLINE_METRICS]
+    metric_labels = [lab for _, lab in HEADLINE_METRICS]
+
+    n_models = len(payloads)
+    n_metrics = len(metric_keys)
+    bar_w = 0.8 / max(1, n_models)
+    fig, ax = plt.subplots(figsize=(max(7.0, 1.8 * n_metrics), 4.0))
+
+    palette = ["#0b6efd", "#198754", "#dc3545", "#cc4c02", "#6f42c1"]
+    for mi, (label, agg) in enumerate(payloads):
+        summary = agg.get("summary", {})
+        means: list[float] = []
+        lo_err: list[float] = []
+        hi_err: list[float] = []
+        for key in metric_keys:
+            row = summary.get(key) or {}
+            mean = float(row.get("mean", float("nan")))
+            ci_lo = float(row.get("ci_lo", float("nan")))
+            ci_hi = float(row.get("ci_hi", float("nan")))
+            means.append(mean)
+            lo_err.append(0.0 if math.isnan(ci_lo) or math.isnan(mean) else max(0.0, mean - ci_lo))
+            hi_err.append(0.0 if math.isnan(ci_hi) or math.isnan(mean) else max(0.0, ci_hi - mean))
+        x = [j + (mi - (n_models - 1) / 2.0) * bar_w for j in range(n_metrics)]
+        ax.bar(
+            x, means,
+            width=bar_w,
+            yerr=[lo_err, hi_err],
+            capsize=3,
+            label=label,
+            color=palette[mi % len(palette)],
+            alpha=0.85,
+        )
+
+    ax.axhline(0.0, color="gray", linewidth=0.7)
+    ax.set_xticks(list(range(n_metrics)))
+    ax.set_xticklabels(metric_labels, rotation=15, ha="right")
+    ax.set_ylabel("Δ = defended − baseline (mean ± 95% CI)")
+    ax.set_title(
+        f"Headline robustness gains — {n_models} model(s), seed-aggregated T3"
+    )
+    ax.legend(frameon=False, loc="best")
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {out_path}  ({n_models} model(s), {n_metrics} metrics)")
+    return 0
+
+
 def _bootstrap_ci(
     samples: list[float],
     *,
@@ -265,48 +291,42 @@ def _bootstrap_ci(
         means.append(sum(resample) / n)
     means.sort()
     alpha = (1.0 - confidence) / 2.0
-    idx = int(alpha * n_resamples) if lo else int((1.0 - alpha) * n_resamples) - 1
+    # Symmetric percentile bootstrap: both bounds use ``int(p * N)``
+    # so the lo and hi sides are inset the same number of resamples
+    # from the edges of the sorted distribution.
+    idx = int(alpha * n_resamples) if lo else int((1.0 - alpha) * n_resamples)
     idx = max(0, min(n_resamples - 1, idx))
     return means[idx]
 
 
-def main() -> int:
-    smoke_path = RUNS / "smoke" / "train_log.jsonl"
-    t0_path = RUNS / "t0" / "gates" / "T0.json"
-    t1_path = RUNS / "t1" / "gates" / "T1.json"
-    for p in (smoke_path, t0_path, t1_path):
+def render_legacy(runs: Path, out_dir: Path) -> int:
+    t0_path = runs / "t0" / "gates" / "T0.json"
+    t1_path = runs / "t1" / "gates" / "T1.json"
+    for p in (t0_path, t1_path):
         if not p.exists():
             print(
-                f"ERROR: missing artifact {p.relative_to(ROOT)} — "
-                "run the producing pipeline first",
+                f"ERROR: missing artifact {p} — run the producing pipeline first",
                 file=sys.stderr,
             )
             return 1
 
-    OUT.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update(PLT_RC)
 
-    smoke = load_jsonl(smoke_path)
-    train_steps = [r for r in smoke if r.get("event") == "train_step"]
-    fit_done = next((r for r in smoke if r.get("event") == "fit_done"), None)
-    if not train_steps or fit_done is None:
+    t0 = load_json_lenient(t0_path)
+    t1 = load_json_lenient(t1_path)
+    if t0 is None or t1 is None:
         print(
-            f"ERROR: {smoke_path.relative_to(ROOT)} has no train_step / fit_done events",
+            f"ERROR: corrupt T0/T1 JSON; cannot render gates summary",
             file=sys.stderr,
         )
         return 1
 
-    t0 = load_json_lenient(t0_path)
-    t1 = load_json_lenient(t1_path)
+    render_gates(t0, t1, out_dir / "fig04_gates_summary.png")
 
-    render_loss_curve(train_steps, fit_done, OUT / "fig01_smoke_loss.png")
-    render_grad_mem(train_steps, OUT / "fig02_smoke_grad_mem.png")
-    render_attack(train_steps, OUT / "fig03_smoke_attack.png")
-    render_gates(t0, t1, OUT / "fig04_gates_summary.png")
-
-    n_figures = 4
-    robust_dirs = sorted(RUNS.glob("*/gates/T3.json"))
-    for t3_path in robust_dirs:
+    n_figures = 1
+    robust_t3_paths = sorted(runs.glob("*/gates/T3.json"))
+    for t3_path in robust_t3_paths:
         gates_dir = t3_path.parent
         baseline_path = gates_dir / "baseline_per_sample.json"
         defended_path = gates_dir / "defended_per_sample.json"
@@ -316,14 +336,56 @@ def main() -> int:
         baseline_ps = load_json_lenient(baseline_path)
         defended_ps = load_json_lenient(defended_path)
         t3_payload = load_json_lenient(t3_path)
-        out_path = OUT / f"fig05_robust_comparison_{run_name}.png"
+        if baseline_ps is None or defended_ps is None or t3_payload is None:
+            print(
+                f"WARN: skipping {run_name} (corrupt per-sample/T3 JSON)",
+                file=sys.stderr,
+            )
+            continue
+        out_path = out_dir / f"fig05_robust_comparison_{run_name}.png"
         render_robust_comparison(baseline_ps, defended_ps, t3_payload, out_path)
         n_figures += 1
 
-    print(f"wrote {n_figures} figures to {OUT}")
-    for p in sorted(OUT.glob("*.png")):
-        print(f"  {p.relative_to(ROOT)}  ({p.stat().st_size // 1024} KiB)")
+    print(f"wrote {n_figures} figures to {out_dir}")
+    for p in sorted(out_dir.glob("*.png")):
+        print(f"  {p}  ({p.stat().st_size // 1024} KiB)")
     return 0
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="make_figures",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "--aggregate", type=Path, nargs="+", default=None,
+        help="aggregate.json file(s) → render headline 3-model figure to --out.",
+    )
+    p.add_argument(
+        "--out", type=Path, default=None,
+        help="Headline figure output PNG (required with --aggregate).",
+    )
+    p.add_argument(
+        "--runs-dir", type=Path, default=ROOT / "runs",
+        help="Legacy mode: walk this dir for T0/T1/T3 inputs (default: <repo>/runs).",
+    )
+    p.add_argument(
+        "--out-dir", type=Path, default=ROOT / "figures",
+        help="Legacy mode: write per-run figures here (default: <repo>/figures).",
+    )
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    plt.rcParams.update(PLT_RC)
+    if args.aggregate:
+        if args.out is None:
+            print("ERROR: --aggregate requires --out", file=sys.stderr)
+            return 2
+        return render_headline_3model(args.aggregate, args.out)
+    return render_legacy(args.runs_dir, args.out_dir)
 
 
 if __name__ == "__main__":
