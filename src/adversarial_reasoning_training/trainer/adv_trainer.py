@@ -168,10 +168,117 @@ class AdvTrainer:
     def fit(self, dataset: Dataset) -> None:
         loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=self.collator)
         total_outer = len(loader) * self.config.epochs
-        global_step = 0
-        accum_loss_acc = 0.0
+        # Mutable trainer-step state — wrapped in a dict so the
+        # ``_apply_optimizer_step`` helper below can mutate it cleanly.
+        state: dict[str, Any] = {
+            "global_step": 0,
+            "accum_loss_acc": 0.0,
+            # accum_count tracks how many *valid* (non-NaN) micro-batches
+            # have been backpropped into the current window. ``do_step``
+            # waits for ``accum_count >= grad_accum``; partial tails at
+            # epoch end are flushed by an explicit drain call. NaN-skip
+            # zeros the counter so the bad window restarts cleanly
+            # rather than stepping on a sub-window of valid grads
+            # (which would silently scale the gradient by
+            # post_skip / grad_accum and mis-report ``avg_loss``).
+            "accum_count": 0,
+        }
         start_time = time.time()
         reset_peak_memory()
+
+        def _apply_optimizer_step(
+            *,
+            epoch: int,
+            loss_out: LossCallResult,
+            diag: dict[str, float],
+            reason: str,
+        ) -> None:
+            """Clip → finite-check → step → log → ckpt. Shared between
+            in-window trigger and end-of-epoch drain.
+            """
+            if state["accum_count"] == 0:
+                return
+            if self.config.grad_clip_norm and self.config.grad_clip_norm > 0:
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    [p for p in self.model.parameters() if p.requires_grad],
+                    max_norm=self.config.grad_clip_norm,
+                )
+            else:
+                total_norm = torch.tensor(0.0)
+
+            if not torch.isfinite(total_norm):
+                self._log({
+                    "event": "skipped_nan_grad",
+                    "global_step": state["global_step"],
+                    "epoch": epoch,
+                    "grad_norm": float("nan"),
+                    "accum_count": state["accum_count"],
+                    "reason": reason,
+                })
+                self.optimizer.zero_grad(set_to_none=True)
+                state["accum_loss_acc"] = 0.0
+                state["accum_count"] = 0
+                return
+
+            self.optimizer.step()
+            if self.scheduler is not None:
+                self.scheduler.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            state["global_step"] += 1
+            avg_loss = state["accum_loss_acc"] / state["accum_count"]
+            steps_in_window = state["accum_count"]
+            state["accum_loss_acc"] = 0.0
+            state["accum_count"] = 0
+
+            if state["global_step"] % self.config.log_every == 0:
+                mem = current_memory_stats()
+                self._log({
+                    "event": "train_step",
+                    "global_step": state["global_step"],
+                    "epoch": epoch,
+                    "avg_loss": avg_loss,
+                    "accum_count": steps_in_window,
+                    "wall_s": time.time() - start_time,
+                    "grad_norm": float(total_norm),
+                    "step_reason": reason,
+                    **loss_out.components,
+                    **diag,
+                    **mem.as_dict(),
+                })
+
+            if self.config.save_every > 0 and state["global_step"] % self.config.save_every == 0:
+                self.ckpt.save(
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    step=state["global_step"],
+                    epoch=epoch,
+                    metric_value=None,
+                    extra={"reason": "save_every"},
+                    include_optimizer=False,
+                )
+
+            if self.config.eval_every > 0 and state["global_step"] % self.config.eval_every == 0:
+                metrics = (
+                    self.evaluator(state["global_step"], epoch) if self.evaluator else {}
+                )
+                metric_value = metrics.get(self.metric_for_best) if metrics else None
+                self._log({
+                    "event": "eval",
+                    "global_step": state["global_step"],
+                    "epoch": epoch,
+                    "metrics": metrics,
+                })
+                self.ckpt.save(
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    step=state["global_step"],
+                    epoch=epoch,
+                    metric_value=metric_value,
+                    extra={"metrics": metrics},
+                )
+
+        last_loss_out: LossCallResult | None = None
+        last_diag: dict[str, float] = {}
 
         for epoch in range(1, self.config.epochs + 1):
             epsilon = epsilon_for_epoch(
@@ -182,100 +289,50 @@ class AdvTrainer:
                 loss_out, diag = self._outer_step(batch_t, epsilon)
 
                 # Finite-loss guard: a single bad batch must not poison every
-                # subsequent step. Drop grads for this micro-batch and continue.
+                # subsequent step. Drop grads for this micro-batch AND reset
+                # the window counter so the next valid micro-batches form a
+                # full grad_accum window before stepping (otherwise the step
+                # would apply on a sub-window with mis-scaled gradient).
                 if not torch.isfinite(loss_out.total):
                     self._log({
                         "event": "skipped_nan_loss",
-                        "global_step": global_step,
+                        "global_step": state["global_step"],
                         "epoch": epoch,
                         "micro_idx": micro_idx,
+                        "accum_count_before_skip": state["accum_count"],
                         **diag,
                     })
                     self.optimizer.zero_grad(set_to_none=True)
-                    accum_loss_acc = 0.0
+                    state["accum_loss_acc"] = 0.0
+                    state["accum_count"] = 0
                     continue
 
                 (loss_out.total / self.config.grad_accum).backward()
-                accum_loss_acc += float(loss_out.total.detach())
+                state["accum_loss_acc"] += float(loss_out.total.detach())
+                state["accum_count"] += 1
+                last_loss_out, last_diag = loss_out, diag
 
-                do_step = ((micro_idx + 1) % self.config.grad_accum) == 0
-                if do_step:
-                    if self.config.grad_clip_norm and self.config.grad_clip_norm > 0:
-                        total_norm = torch.nn.utils.clip_grad_norm_(
-                            [p for p in self.model.parameters() if p.requires_grad],
-                            max_norm=self.config.grad_clip_norm,
-                        )
-                    else:
-                        total_norm = torch.tensor(0.0)
+                if state["accum_count"] >= self.config.grad_accum:
+                    _apply_optimizer_step(
+                        epoch=epoch,
+                        loss_out=loss_out,
+                        diag=diag,
+                        reason="window_full",
+                    )
 
-                    # Finite-grad guard: clip_grad_norm_ does not zero NaN
-                    # grads; optimizer.step() would propagate them into params.
-                    if not torch.isfinite(total_norm):
-                        self._log({
-                            "event": "skipped_nan_grad",
-                            "global_step": global_step,
-                            "epoch": epoch,
-                            "grad_norm": float("nan"),
-                        })
-                        self.optimizer.zero_grad(set_to_none=True)
-                        accum_loss_acc = 0.0
-                        continue
+            # End-of-epoch drain: trailing micro-batches in a partial
+            # window must be applied before crossing the epoch boundary,
+            # else their grads leak into the next epoch's first window
+            # and the final epoch's tail never updates the model at all.
+            if state["accum_count"] > 0 and last_loss_out is not None:
+                _apply_optimizer_step(
+                    epoch=epoch,
+                    loss_out=last_loss_out,
+                    diag=last_diag,
+                    reason="epoch_end_drain",
+                )
 
-                    self.optimizer.step()
-                    if self.scheduler is not None:
-                        self.scheduler.step()
-                    self.optimizer.zero_grad(set_to_none=True)
-                    global_step += 1
-                    avg_loss = accum_loss_acc / self.config.grad_accum
-                    accum_loss_acc = 0.0
-
-                    if global_step % self.config.log_every == 0:
-                        mem = current_memory_stats()
-                        self._log({
-                            "event": "train_step",
-                            "global_step": global_step,
-                            "epoch": epoch,
-                            "avg_loss": avg_loss,
-                            "wall_s": time.time() - start_time,
-                            "grad_norm": float(total_norm),
-                            **loss_out.components,
-                            **diag,
-                            **mem.as_dict(),
-                        })
-
-                    if self.config.save_every > 0 and global_step % self.config.save_every == 0:
-                        # Periodic cadence: weights-only to avoid 50+ GB
-                        # writes per save during long training runs.
-                        # Final save below preserves optimizer for resume.
-                        self.ckpt.save(
-                            model=self.model,
-                            optimizer=self.optimizer,
-                            step=global_step,
-                            epoch=epoch,
-                            metric_value=None,
-                            extra={"reason": "save_every"},
-                            include_optimizer=False,
-                        )
-
-                    if self.config.eval_every > 0 and global_step % self.config.eval_every == 0:
-                        metrics = (
-                            self.evaluator(global_step, epoch) if self.evaluator else {}
-                        )
-                        metric_value = metrics.get(self.metric_for_best) if metrics else None
-                        self._log({
-                            "event": "eval",
-                            "global_step": global_step,
-                            "epoch": epoch,
-                            "metrics": metrics,
-                        })
-                        self.ckpt.save(
-                            model=self.model,
-                            optimizer=self.optimizer,
-                            step=global_step,
-                            epoch=epoch,
-                            metric_value=metric_value,
-                            extra={"metrics": metrics},
-                        )
+        global_step = state["global_step"]
 
         # --- final checkpoint + end-of-training evaluation
         metrics = self.evaluator(global_step, self.config.epochs) if self.evaluator else {}
@@ -289,10 +346,28 @@ class AdvTrainer:
             extra={"metrics": metrics, "final": True},
             include_optimizer=self.config.final_save_include_optimizer,
         )
+        duration_s = time.time() - start_time
+        final_mem = current_memory_stats()
         self._log({
             "event": "fit_done",
             "global_step": global_step,
-            "wall_s": time.time() - start_time,
+            "wall_s": duration_s,
             "metrics": metrics,
             "total_outer": total_outer,
+            **final_mem.as_dict(),
         })
+        # Compute-transparency metadata: scripts/figures/compute_summary.py
+        # walks each run dir for this file to render the H200-hours/peak-GiB
+        # LaTeX table. Keys mirror the gate JSON schema so the same reader
+        # works across T0/T1/T2/T3 + trainer outputs.
+        meta = {
+            "duration_s": duration_s,
+            "peak_memory_gb": final_mem.peak_allocated_gb,
+            "peak_reserved_gb": final_mem.peak_reserved_gb,
+            "global_step": global_step,
+            "total_outer": total_outer,
+            "epochs": self.config.epochs,
+            "device": final_mem.device,
+        }
+        meta_path = self.config.run_dir / "train_meta.json"
+        meta_path.write_text(json.dumps(meta, indent=2) + "\n")
