@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -44,6 +44,12 @@ class T3Result:
     duration_s: float
     thresholds: dict[str, Any]
     notes: list[str]
+    # Metrics whose entire array was emptied by the NaN-drop fallback
+    # (e.g. ``args_iou`` when records pre-date the trajectory_record
+    # schema extension). Surfaced explicitly so an operator reviewing
+    # T3.json can tell at a glance which evidence was lost — without
+    # this, T3 used to pass with 3/4 metrics quietly missing.
+    dropped_metrics: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -96,6 +102,7 @@ def run_t3(
     defended_per_sample: dict[str, list[float]],
     out_path: Path,
     thresholds: T3Thresholds = T3Thresholds(),
+    dropped_metrics: list[str] | None = None,
 ) -> T3Result:
     """Compare two per-sample metric dicts under BH-FDR.
 
@@ -147,6 +154,12 @@ def run_t3(
             f"only {len(significant)} of {len(metric_keys)} metrics significant after BH-FDR"
         )
 
+    drops = list(dropped_metrics or [])
+    if drops:
+        notes.append(
+            "dropped metrics due to NaN on either paired side: "
+            + ", ".join(drops)
+        )
     result = T3Result(
         passed=passed,
         per_metric=per_metric,
@@ -159,6 +172,7 @@ def run_t3(
             "metrics": list(thresholds.metrics),
         },
         notes=notes,
+        dropped_metrics=drops,
     )
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(result.to_dict(), f, indent=2)
