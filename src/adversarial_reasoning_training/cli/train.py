@@ -14,6 +14,7 @@ hard-coded paths.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Any
 
@@ -91,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     metadata_lookup = (
         load_metadata_csv(metadata_csv) if metadata_csv else {}
     )
-    n_train = train_cfg.get("smoke_max_samples") or data_cfg.get("n_train")
+    n_train = data_cfg.get("n_train")
     train_ds = ProstateXTrainDS(
         task_id=data_cfg["task_id"],
         split=data_cfg.get("train_split", "train"),
@@ -112,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         lr_vit=train_cfg["lr"]["vit"],
     )
     optimizer = build_optimizer(model, optim_cfg)
-    total_steps = train_cfg["epochs"] * max(1, len(train_ds) // train_cfg["grad_accum"])
+    total_steps = train_cfg["epochs"] * max(1, math.ceil(len(train_ds) / train_cfg["grad_accum"]))
     scheduler = build_scheduler(
         optimizer,
         ScheduleConfig(
@@ -122,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
-    loss_fn = build_loss(from_cfg_dict({"defense": train_cfg.get("defense", "trades"), **defense_cfg}))
+    loss_fn = build_loss(from_cfg_dict({**defense_cfg, "defense": train_cfg.get("defense", "trades")}))
 
     trainer_cfg = TrainerConfig(
         epochs=train_cfg["epochs"],

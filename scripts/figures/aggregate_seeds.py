@@ -121,7 +121,7 @@ def _extract_seed_metrics(
             if k not in per:
                 continue
             row = per[k]
-            for field in ("baseline_mean", "defended_mean", "delta", "p_value", "p_adj"):
+            for field in ("baseline_mean", "defended_mean", "delta_mean", "p_value", "p_adj"):
                 if field in row:
                     out["T3"][f"{k}_{field}"] = float(row[field])
 

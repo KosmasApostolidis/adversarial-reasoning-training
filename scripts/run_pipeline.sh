@@ -391,7 +391,8 @@ run_one_seed() {
         --run-dir      "$RUN_DIR" \
         --device       "$DEVICE" \
         --seed         "$SEED" \
-        --models-yaml  "${ATTACKS_DIR}/configs/models.yaml"
+        --models-yaml  "${ATTACKS_DIR}/configs/models.yaml" \
+        || { echo "FAIL [${ALIAS}/seed${SEED}]: art-train rc=$?" >&2; return 1; }
       CKPT="$(resolve_ckpt "$RUN_DIR")"
     fi
   fi
@@ -409,7 +410,8 @@ run_one_seed() {
           --gold          configs/gold.yaml \
           --device        "$DEVICE" \
           --tolerance-pp  3.0 \
-          --out           "$T2_OUT"
+          --out           "$T2_OUT" \
+          || { echo "FAIL [${ALIAS}/seed${SEED}]: T2 rc=$?" >&2; return 1; }
       fi
     fi
   fi
@@ -424,7 +426,8 @@ run_one_seed() {
         --pgd-steps      20 \
         --target-tool    escalate_to_specialist \
         --target-step-k  0 \
-        --out            '${REPO_ROOT}/${DEFENDED_DIR}'"
+        --out            '${REPO_ROOT}/${DEFENDED_DIR}'" \
+        || { echo "FAIL [${ALIAS}/seed${SEED}]: defended-eval rc=$?" >&2; return 1; }
     fi
     if skip_if_exists "$T3_OUT"; then
       run art-eval-robust \
@@ -433,7 +436,8 @@ run_one_seed() {
         --out-dir                  "${RUN_DIR}/gates/" \
         --alpha                    0.05 \
         --min-traj-edit-delta      0.10 \
-        --min-significant-metrics  3
+        --min-significant-metrics  3 \
+        || { echo "FAIL [${ALIAS}/seed${SEED}]: T3-eval rc=$?" >&2; return 1; }
     fi
   fi
 }

@@ -92,6 +92,9 @@ class AdvTrainer:
         self.config.run_dir.mkdir(parents=True, exist_ok=True)
         self.ckpt = CheckpointRegistry(self.config.run_dir / "ckpt")
         self.log_path = self.config.run_dir / "train_log.jsonl"
+        self.scaler = torch.amp.GradScaler(
+            self.device.type, enabled=(config.amp_dtype == "fp16")
+        )
 
     # --- utilities --------------------------------------------------------
 
@@ -147,6 +150,8 @@ class AdvTrainer:
         x_adv = attack_result.perturbed_image.detach().to(self.device)
         if x_adv.ndim == 3:
             x_adv = x_adv.unsqueeze(0)
+
+        self.model.train(True)
 
         with torch.autocast(device_type=self.device.type, dtype=self._amp_dtype()):
             logits_clean = self._forward_logits(batch, pixel_values)
@@ -220,7 +225,8 @@ class AdvTrainer:
                 state["accum_count"] = 0
                 return
 
-            self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             if self.scheduler is not None:
                 self.scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
@@ -280,7 +286,18 @@ class AdvTrainer:
         last_loss_out: LossCallResult | None = None
         last_diag: dict[str, float] = {}
 
+        loss_cfg = getattr(self.loss_fn, "config", None)
+        beta_start: float = 6.0
+        beta_end: float = 6.0
+        if loss_cfg is not None:
+            beta_start = loss_cfg.beta
+            beta_end = getattr(loss_cfg, "beta_end", loss_cfg.beta)
+
         for epoch in range(1, self.config.epochs + 1):
+            if loss_cfg is not None and self.config.epochs > 1:
+                frac = (epoch - 1) / (self.config.epochs - 1)
+                loss_cfg.beta = beta_start + frac * (beta_end - beta_start)
+
             epsilon = epsilon_for_epoch(
                 epoch, self.config.eps_schedule, default_eps=self.config.default_epsilon,
             )
@@ -307,7 +324,7 @@ class AdvTrainer:
                     state["accum_count"] = 0
                     continue
 
-                (loss_out.total / self.config.grad_accum).backward()
+                self.scaler.scale(loss_out.total / self.config.grad_accum).backward()
                 state["accum_loss_acc"] += float(loss_out.total.detach())
                 state["accum_count"] += 1
                 last_loss_out, last_diag = loss_out, diag
