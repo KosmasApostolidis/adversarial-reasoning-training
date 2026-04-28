@@ -14,6 +14,62 @@ Seeds per cell: 5 (`SEED ∈ {0,1,2,3,4}`).
 
 ---
 
+## Restoration plan (2026-04-28)
+
+State on this branch (`fix/audit-trainer-pipeline-t3-losses`) before launching anything:
+
+| Asset                                            | State                                          |
+|--------------------------------------------------|------------------------------------------------|
+| `runs/baseline_qwen/records.jsonl`               | 3.8 MB — intact                                |
+| `runs/baseline_llava/records.jsonl`              | 8.4 MB — intact                                |
+| `runs/baseline_internvl2/records.jsonl`          | **0 bytes** — poisoned stub (R1 below)         |
+| `runs/{qwen,llava,internvl2}_main_seed{0..4}/`   | dirs exist, **0 files** each                   |
+| `runs/adv1_{qwen,llava,internvl2}/ckpt/hf_dir/`  | **all missing** (Phase 3 of the standard sheet)|
+| `results/qwen_main/aggregate.json`               | 1.9 KB — stale, regenerate after Phase 4       |
+
+The `aggregate` phase pre-check (`scripts/run_pipeline.sh:183-191`, wired in
+`run_one_model` around line 407) now reports any
+model whose seed dirs are entirely empty as `aggregate/<alias> (training-not-run)`
+in the pipeline summary, instead of the misleading `ERROR: missing seed dirs / rc=1`.
+A clean run from the current state should be:
+
+```bash
+# Optional sanity dry-run — confirms WARN: skipping aggregate/<alias>
+# — no training data lines for llava and internvl2.
+bash scripts/run_pipeline.sh --models qwen,llava,internvl2 --phases aggregate
+```
+
+Required restoration steps, in order:
+
+| Step | What                                                | Section                          | Wall-time est. |
+|------|-----------------------------------------------------|----------------------------------|----------------|
+| R1   | Re-baseline `internvl2` (regenerate 0-byte records) | "Phase 1 — Baseline records"     | ~2 h H200      |
+| R2   | T0 + T1 gates per model (skip already-green ones)   | CLI Reference / Phase 1          | ~2 h × 3       |
+| R3   | Adv-FT × 3 models × 5 seeds                         | Phase 2 / Phase 3                | ~6–8 h × 15    |
+| R4   | HF export of seed-0 ckpts (one per model)           | Defended-model hf_dir conversion | ~5 min × 3     |
+| R5   | Re-run pipeline end-to-end                          | "Pipeline driver"                | ~3 h × 3       |
+
+After R5, expect:
+- `results/qwen_main/aggregate.json` regenerated (5 seeds)
+- `results/llava_main/aggregate.json` new
+- `results/internvl2_main/aggregate.json` new
+- `figures/fig_headline_3model.png` rendered with 3 model rows
+- pipeline summary clean (no `FAIL:` block)
+
+Two open issues to surface before the publication cut:
+
+1. **Defended-attack seed degeneracy.** `adversarial_reasoning.runner` does not accept
+   `--seed`; each `defended_<alias>.yaml` hardcodes `seeds: [0]`. The five "per-seed"
+   defended records are degenerate copies. Tracked in
+   `.claude/plans/idempotent-snuggling-quokka.md` Blocker section. Needs decision
+   before treating the 5-seed defended variance as real.
+2. **0-byte records on model-load failure.** `runner.py:378` opens `records.jsonl`
+   *before* `load_hf_vlm`, leaving a 0-byte stub on any load failure. Cause of the
+   `baseline_internvl2/records.jsonl` corruption above. Cross-repo fix; tracked in
+   `.claude/plans/idempotent-snuggling-quokka.md` Fix 1.
+
+---
+
 ## Project & Problem
 
 Medical-imaging VLM agents (Qwen2.5-VL-7B, LLaVA-v1.6-Mistral-7B,

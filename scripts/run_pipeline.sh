@@ -174,6 +174,28 @@ assert_hf_dir() {
   fi
 }
 
+# Return 0 when at least one seed dir contains a gate JSON that
+# aggregate_seeds.py actually consumes (gates/T2.json or gates/T3.json),
+# 1 when none of the supplied seed dirs has data. Used by the aggregate
+# pre-check so that "training not run yet" is reported as a clean
+# operational state instead of an aggregate_seeds.py rc=1 ERROR — those
+# look like code bugs in the pipeline summary.
+#
+# Partial-data state (some seeds populated, others empty or holding only
+# one of T2/T3) deliberately falls through to aggregate_seeds.py, which
+# applies its existing --min-seeds warning. We only short-circuit when
+# *every* seed dir is empty, because that is the operational state we
+# want to surface differently from "aggregator crashed".
+seed_dirs_have_data() {
+  local dir
+  for dir in "$@"; do
+    if [[ -s "${dir}/gates/T2.json" || -s "${dir}/gates/T3.json" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Resolve the trained ckpt path for a run. The trainer writes
 #   ckpt/index.json   ->  {"latest_path": "...", "best_path": null|"..."}
 # and the actual blob is ckpt/step*-ep*.pt (best.pt only exists when best
@@ -382,11 +404,32 @@ run_one_model() {
       for SEED in "${SEEDS[@]}"; do
         SEED_DIRS+=("${RUNS_DIR}/${ALIAS}_main_seed${SEED}")
       done
-      isolate "aggregate/${ALIAS}" run python scripts/figures/aggregate_seeds.py \
-        --seeds       "${SEED_DIRS[@]}" \
-        --shared-t1   "$T1_OUT" \
-        --min-seeds   "$MIN_SEEDS" \
-        --out         "$AGG_OUT"
+      # Pre-check: aggregate_seeds.py hard-errors rc=1 when ANY seed
+      # dir is missing. The error message "ERROR: missing seed dirs"
+      # then reads like an aggregator code bug rather than the actual
+      # cause (training has not been run yet). Short-circuit before
+      # invoking the script so the operator sees the operational state.
+      #
+      # Caveat — failure record visibility: PIPELINE_FAILURES is
+      # appended here, but `run_one_model` is invoked under
+      # `isolate "model/${ALIAS}" ...` (see line ~497) which wraps the
+      # body in a subshell, so the append does not survive back to the
+      # parent shell in non-strict mode. The WARN above is the visible
+      # signal. The same scoping limitation already applies to the
+      # inner `isolate "aggregate/${ALIAS}" ...` failure handler in
+      # `isolate()` itself, so this is consistent with existing
+      # behavior, not a regression. Strict mode (no subshell) does
+      # propagate the entry.
+      if ! seed_dirs_have_data "${SEED_DIRS[@]}"; then
+        echo "WARN: skipping aggregate/${ALIAS} — no training data (see docs/EXPERIMENT_RUNS.md to populate seeds)" >&2
+        PIPELINE_FAILURES+=("aggregate/${ALIAS} (training-not-run)")
+      else
+        isolate "aggregate/${ALIAS}" run python scripts/figures/aggregate_seeds.py \
+          --seeds       "${SEED_DIRS[@]}" \
+          --shared-t1   "$T1_OUT" \
+          --min-seeds   "$MIN_SEEDS" \
+          --out         "$AGG_OUT"
+      fi
     fi
   fi
 }
