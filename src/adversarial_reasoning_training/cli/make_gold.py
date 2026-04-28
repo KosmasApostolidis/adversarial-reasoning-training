@@ -95,6 +95,14 @@ def main(argv: list[str] | None = None) -> int:
         "split": args.split,
         "synthetic": synthetic,
     }
+    # Persist a per-split summary file inside cache_dir so external runners
+    # (e.g. scripts/run_pipeline.sh under --skip-existing) have a stable
+    # sentinel to detect a completed split. Without it, every pipeline
+    # invocation re-iterates the entire split — gold_exists() short-circuits
+    # writes but the load_task call still hits the dataset loader.
+    summary_path = Path(cache_dir) / f"_summary_{args.split}.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+
     print(json.dumps(summary, indent=2))
     return 0
 

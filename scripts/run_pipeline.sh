@@ -286,8 +286,15 @@ echo
 # ---------------------------------------------------------------------------
 if phase_enabled gold; then
   echo "--- Step 0: gold trajectories ---"
+  # art-make-gold writes ${cache_dir}/_summary_${SPLIT}.json on success.
+  # Use that as the skip-existing sentinel — there is no top-level dotfile
+  # written by the CLI, so the prior `.gold_cache_done.${SPLIT}` path was
+  # never created and --skip-existing silently re-ran the loader every time.
+  # GOLD_CACHE_DIR mirrors configs/gold.yaml:cache_dir; update both together
+  # when the cache moves.
+  GOLD_CACHE_DIR="data/gold"
   for SPLIT in train dev test; do
-    SENTINEL=".gold_cache_done.${SPLIT}"
+    SENTINEL="${GOLD_CACHE_DIR}/_summary_${SPLIT}.json"
     if skip_if_exists "$SENTINEL"; then
       isolate "gold/${SPLIT}" run art-make-gold \
         --config configs/gold.yaml \

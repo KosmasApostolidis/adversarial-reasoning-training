@@ -84,9 +84,16 @@ def main(argv: list[str] | None = None) -> int:
 
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
+    # InternVL2 ships no formal HF processor — pass the wrapper itself so the
+    # teacher-force assembler can reach .preprocess_image / .tokenizer /
+    # ._num_image_token. Qwen + LLaVA-NeXT use their AutoProcessor as before.
+    if vlm.family == "internvl2":
+        proc_arg: Any = vlm
+    else:
+        proc_arg = getattr(vlm, "processor", None) or vlm.tokenizer
     collator = TFCollator(
         family=vlm.family,
-        processor=getattr(vlm, "processor", None) or vlm.tokenizer,
+        processor=proc_arg,
     )
     metadata_csv = data_cfg.get("metadata_csv")
     metadata_lookup = (
