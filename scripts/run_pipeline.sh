@@ -86,6 +86,18 @@ IFS=',' read -r -a MODELS <<< "$MODELS_CSV"
 IFS=',' read -r -a SEEDS  <<< "$SEEDS_CSV"
 IFS=',' read -r -a PHASES <<< "$PHASES_CSV"
 
+# Reject unknown --models aliases up front so a typo (e.g. "qwn") fails fast
+# instead of crashing 30+ s into the trainer with a cryptic registry KeyError
+# after the operator has already left the dry-run / --apply gate behind.
+for _alias in "${MODELS[@]}"; do
+  case "$_alias" in
+    qwen|llava|llava13b|llama|internvl2) ;;
+    *) echo "ERROR: unknown --models alias '$_alias' (valid: qwen|llava|llava13b|llama|internvl2)" >&2
+       exit 2 ;;
+  esac
+done
+unset _alias
+
 phase_enabled() {
   local needle="$1"
   for p in "${PHASES[@]}"; do [[ "$p" == "$needle" ]] && return 0; done
@@ -268,7 +280,34 @@ print(p)" "$idx" 2>/tmp/.resolve_ckpt.$$.err)" || rel=""
 # gets a single summary line at the end (instead of having to grep
 # the log for WARN lines) AND the script exits non-zero so CI catches
 # silent regressions even in fault-tolerant mode.
-PIPELINE_FAILURES=()
+#
+# Persist failures in a tmpfile rather than a Bash array because
+# `isolate` runs each phase body in a `( ... )` subshell (see below),
+# and array mutations inside that subshell never propagate back to
+# the parent — so the prior `PIPELINE_FAILURES+=(...)` was a no-op
+# in fault-tolerant mode and the end-of-run summary under-counted.
+PIPELINE_FAILURES_FILE="$(mktemp -t pipeline_failures.XXXXXX)"
+# Track the primary output of the currently-running phase so
+# SIGINT/SIGTERM can clean up partially-written files. Bash resets
+# signal traps inside `( ... )` subshells, so we communicate via a
+# tmpfile instead of a shell variable.
+CURRENT_OUT_FILE="$(mktemp -t pipeline_current.XXXXXX)"
+
+mark_out()  { printf '%s\n' "$1" > "$CURRENT_OUT_FILE"; }
+clear_out() { : > "$CURRENT_OUT_FILE"; }
+
+_cleanup_on_signal() {
+  local out=""
+  [[ -s "$CURRENT_OUT_FILE" ]] && out="$(<"$CURRENT_OUT_FILE")"
+  if [[ -n "$out" && -e "$out" ]]; then
+    echo "INTERRUPT: removing partial output: $out" >&2
+    rm -rf -- "$out"
+  fi
+  rm -f -- "$PIPELINE_FAILURES_FILE" "$CURRENT_OUT_FILE"
+  exit 130
+}
+trap '_cleanup_on_signal' INT TERM
+trap 'rm -f -- "$PIPELINE_FAILURES_FILE" "$CURRENT_OUT_FILE"' EXIT
 
 # Wrap a phase body so a failure prints WARN and is recorded (unless
 # --strict, which still aborts the script via set -e + return $rc).
@@ -281,7 +320,7 @@ isolate() {
   ( "$@" ) || {
     local rc=$?
     echo "WARN: $label failed (rc=$rc), continuing" >&2
-    PIPELINE_FAILURES+=("${label} (rc=${rc})")
+    printf '%s (rc=%s)\n' "$label" "$rc" >> "$PIPELINE_FAILURES_FILE"
     return 0
   }
 }
@@ -322,10 +361,12 @@ if phase_enabled gold; then
   for SPLIT in train dev test; do
     SENTINEL="${GOLD_CACHE_DIR}/_summary_${SPLIT}.json"
     if skip_if_exists "$SENTINEL"; then
+      mark_out "$SENTINEL"
       isolate "gold/${SPLIT}" run art-make-gold \
         --config configs/gold.yaml \
         --data   configs/data.yaml \
         --split  "$SPLIT"
+      clear_out
     fi
   done
 fi
@@ -354,6 +395,7 @@ run_one_model() {
   if phase_enabled t0; then
     echo "--- T0 env gate ($ALIAS) ---"
     if skip_if_exists "$T0_OUT"; then
+      mark_out "$T0_OUT"
       isolate "T0/${ALIAS}" run python -m adversarial_reasoning_training.gates.T0_env \
         --model      "$MODEL_ID" \
         --defenses   configs/defenses.yaml \
@@ -364,12 +406,14 @@ run_one_model() {
         --epsilon    0.01568627 \
         --pgd-steps  3 \
         --out        "$T0_OUT"
+      clear_out
     fi
   fi
 
   if phase_enabled t1; then
     echo "--- T1 clean-FT gate ($ALIAS) ---"
     if skip_if_exists "$T1_OUT"; then
+      mark_out "$T1_OUT"
       isolate "T1/${ALIAS}" run python -m adversarial_reasoning_training.gates.T1_clean \
         --model              "$MODEL_ID" \
         --training           configs/training.yaml \
@@ -382,6 +426,7 @@ run_one_model() {
         --tool-name-acc-min  0.85 \
         --answer-em-min      0.70 \
         --out                "$T1_OUT"
+      clear_out
     fi
   fi
 
@@ -391,6 +436,7 @@ run_one_model() {
       run mkdir -p "$BASELINE_DIR"
       # NOTE: runner's --out is a *directory*; records are written to
       # <out>/records.jsonl. Point it at the dir, not the file.
+      mark_out "$BASELINE_RECORDS"
       isolate "baseline/${ALIAS}" run_sh "cd '$ATTACKS_DIR' && python -m adversarial_reasoning.runner \
         --config         configs/experiments/baseline_${ALIAS}.yaml \
         --attacks-config configs/attacks.yaml \
@@ -400,6 +446,7 @@ run_one_model() {
         --target-tool    escalate_to_specialist \
         --target-step-k  0 \
         --out            '${REPO_ROOT}/${BASELINE_DIR}'"
+      clear_out
     fi
   fi
 
@@ -443,33 +490,28 @@ run_one_model() {
       # cause (training has not been run yet). Short-circuit before
       # invoking the script so the operator sees the operational state.
       #
-      # Caveat — failure record visibility: PIPELINE_FAILURES is
-      # appended here, but `run_one_model` is invoked under
-      # `isolate "model/${ALIAS}" ...` (see line ~497) which wraps the
-      # body in a subshell, so the append does not survive back to the
-      # parent shell in non-strict mode. The WARN above is the visible
-      # signal. The same scoping limitation already applies to the
-      # inner `isolate "aggregate/${ALIAS}" ...` failure handler in
-      # `isolate()` itself, so this is consistent with existing
-      # behavior, not a regression. Strict mode (no subshell) does
-      # propagate the entry.
+      # We append to $PIPELINE_FAILURES_FILE rather than the array
+      # because `run_one_model` itself runs in an `isolate (...)`
+      # subshell — the file persists across subshell boundaries.
       if ! seed_dirs_have_data "${SEED_DIRS[@]}"; then
         if seed_dirs_have_ckpt "${SEED_DIRS[@]}"; then
           # Training succeeded (ckpts on disk) but T2/T3 phases were
           # skipped or failed — different remedy from "no training yet":
           # rerunning `--phases t2,t3` is enough, no need to re-train.
           echo "WARN: skipping aggregate/${ALIAS} — ckpts exist but no gates produced (rerun --phases t2,t3)" >&2
-          PIPELINE_FAILURES+=("aggregate/${ALIAS} (gates-missing)")
+          printf 'aggregate/%s (gates-missing)\n' "$ALIAS" >> "$PIPELINE_FAILURES_FILE"
         else
           echo "WARN: skipping aggregate/${ALIAS} — no training data (see docs/EXPERIMENT_RUNS.md to populate seeds)" >&2
-          PIPELINE_FAILURES+=("aggregate/${ALIAS} (training-not-run)")
+          printf 'aggregate/%s (training-not-run)\n' "$ALIAS" >> "$PIPELINE_FAILURES_FILE"
         fi
       else
+        mark_out "$AGG_OUT"
         isolate "aggregate/${ALIAS}" run python scripts/figures/aggregate_seeds.py \
           --seeds       "${SEED_DIRS[@]}" \
           --shared-t1   "$T1_OUT" \
           --min-seeds   "$MIN_SEEDS" \
           --out         "$AGG_OUT"
+        clear_out
       fi
     fi
   fi
@@ -508,6 +550,7 @@ run_one_seed() {
       if [[ -z "$CKPT" ]]; then
         echo "SKIP T2 (no ckpt resolved for $RUN_DIR)" >&2
       else
+        mark_out "$T2_OUT"
         run python -m adversarial_reasoning_training.gates.T2_no_collapse \
           --model         "$MODEL_ID" \
           --ckpt          "$CKPT" \
@@ -517,7 +560,8 @@ run_one_seed() {
           --device        "$DEVICE" \
           --tolerance-pp  3.0 \
           --out           "$T2_OUT" \
-          || { echo "FAIL [${ALIAS}/seed${SEED}]: T2 rc=$?" >&2; return 1; }
+          || { echo "FAIL [${ALIAS}/seed${SEED}]: T2 rc=$?" >&2; clear_out; return 1; }
+        clear_out
       fi
     fi
   fi
@@ -526,6 +570,7 @@ run_one_seed() {
     if skip_if_exists "$DEFENDED_RECORDS"; then
       assert_hf_dir "$ALIAS" \
         || { echo "FAIL [${ALIAS}/seed${SEED}]: defended-eval prerequisite missing" >&2; return 1; }
+      mark_out "$DEFENDED_RECORDS"
       run_sh "cd '$ATTACKS_DIR' && python -m adversarial_reasoning.runner \
         --config         configs/experiments/defended_${ALIAS}.yaml \
         --attacks-config configs/attacks.yaml \
@@ -535,9 +580,11 @@ run_one_seed() {
         --target-tool    escalate_to_specialist \
         --target-step-k  0 \
         --out            '${REPO_ROOT}/${DEFENDED_DIR}'" \
-        || { echo "FAIL [${ALIAS}/seed${SEED}]: defended-eval rc=$?" >&2; return 1; }
+        || { echo "FAIL [${ALIAS}/seed${SEED}]: defended-eval rc=$?" >&2; clear_out; return 1; }
+      clear_out
     fi
     if skip_if_exists "$T3_OUT"; then
+      mark_out "$T3_OUT"
       run art-eval-robust \
         --baseline-records         "$BASELINE_RECORDS" \
         --defended-records         "$DEFENDED_RECORDS" \
@@ -545,7 +592,8 @@ run_one_seed() {
         --alpha                    0.05 \
         --min-traj-edit-delta      0.10 \
         --min-significant-metrics  3 \
-        || { echo "FAIL [${ALIAS}/seed${SEED}]: T3-eval rc=$?" >&2; return 1; }
+        || { echo "FAIL [${ALIAS}/seed${SEED}]: T3-eval rc=$?" >&2; clear_out; return 1; }
+      clear_out
     fi
   fi
 }
@@ -565,23 +613,32 @@ if phase_enabled figures; then
     AGG_INPUTS+=("${RESULTS_DIR}/${ALIAS}_main/aggregate.json")
   done
   run mkdir -p "$FIGURES_DIR"
+  mark_out "${FIGURES_DIR}/fig_headline_3model.png"
   isolate "figures" run python scripts/figures/make_figures.py \
     --aggregate "${AGG_INPUTS[@]}" \
     --out       "${FIGURES_DIR}/fig_headline_3model.png"
+  clear_out
 fi
 
 if phase_enabled compute; then
   echo
   echo "--- compute summary (H200 hours / peak GiB) ---"
   run mkdir -p "$TABLES_DIR"
+  mark_out "${TABLES_DIR}/compute.tex"
   isolate "compute" run python scripts/figures/compute_summary.py \
     --runs "$RUNS_DIR" \
     --out  "${TABLES_DIR}/compute.tex"
+  clear_out
 fi
 
 echo
 echo "=== pipeline done (apply=$APPLY) ==="
 [[ "$APPLY" -eq 0 ]] && echo "Re-run with --apply to execute."
+
+PIPELINE_FAILURES=()
+if [[ -s "$PIPELINE_FAILURES_FILE" ]]; then
+  mapfile -t PIPELINE_FAILURES < "$PIPELINE_FAILURES_FILE"
+fi
 if (( ${#PIPELINE_FAILURES[@]} > 0 )); then
   echo
   echo "FAIL: ${#PIPELINE_FAILURES[@]} phase(s) failed in non-strict mode:" >&2
