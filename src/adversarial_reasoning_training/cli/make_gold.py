@@ -100,8 +100,17 @@ def main(argv: list[str] | None = None) -> int:
     # sentinel to detect a completed split. Without it, every pipeline
     # invocation re-iterates the entire split — gold_exists() short-circuits
     # writes but the load_task call still hits the dataset loader.
+    #
+    # Atomic write: SIGKILL/OOM/disk-full mid-write would otherwise leave a
+    # truncated JSON sentinel that the pipeline pre-check trusts as
+    # proof-of-completion, silently consuming a partial gold cache. tmp
+    # filename uses the PID so concurrent runs targeting different splits
+    # cannot stomp each other's tmp file.
+    import os as _os  # local import keeps the public import surface clean
     summary_path = Path(cache_dir) / f"_summary_{args.split}.json"
-    summary_path.write_text(json.dumps(summary, indent=2))
+    tmp_path = summary_path.with_name(f"{summary_path.name}.tmp.{_os.getpid()}")
+    tmp_path.write_text(json.dumps(summary, indent=2))
+    _os.replace(tmp_path, summary_path)
 
     print(json.dumps(summary, indent=2))
     return 0

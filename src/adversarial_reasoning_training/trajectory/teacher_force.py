@@ -517,6 +517,24 @@ def assemble_llava_next(
     accepted by ``LlavaNext.forward_with_logits``.
     """
     tokenizer = getattr(processor, "tokenizer", processor)
+    # Mistral-Instruct's chat template needs both BOS and EOS to bracket
+    # turns: dropping BOS mis-routes the first user prompt; dropping EOS
+    # collapses assistant-turn boundaries and the loss mask leaks across
+    # turns. The tokenize step is permissive (sentinels skipped silently
+    # when ids are None), so we fail loud here instead of producing
+    # quietly corrupt teacher-forced sequences.
+    if getattr(tokenizer, "bos_token_id", None) is None:
+        raise RuntimeError(
+            "LLaVA-NeXT tokenizer is missing bos_token_id; cannot build "
+            "teacher-forced sequence. Check that the processor was loaded "
+            "from a Mistral-Instruct-compatible checkpoint."
+        )
+    if getattr(tokenizer, "eos_token_id", None) is None:
+        raise RuntimeError(
+            "LLaVA-NeXT tokenizer is missing eos_token_id; cannot delimit "
+            "assistant turns. Check that the processor was loaded from a "
+            "Mistral-Instruct-compatible checkpoint."
+        )
     forward_kwargs, image_token_id, num_image_tokens = _process_image_llava(
         image, processor
     )
@@ -786,21 +804,23 @@ def assemble(
       ``.preprocess_image``, ``._num_image_token``); InternVL2 has no
       first-class HF processor.
     """
-    if family == "qwen_vl":
-        return assemble_qwen(
-            user_prompt, trajectory, image, processor,
-            system_prompt=system_prompt, weights=weights,
+    # Centralised dispatch — keeps the canonical family-name set in one
+    # place so callers get a clear ``ValueError`` listing valid options on
+    # a typo (e.g. "qwen2_5_vl") instead of the older
+    # ``NotImplementedError`` which was indistinguishable from "support
+    # not yet wired up". When adding a new family, register it here.
+    dispatch = {
+        "qwen_vl": assemble_qwen,
+        "llava_next": assemble_llava_next,
+        "internvl2": assemble_internvl,
+    }
+    fn = dispatch.get(family)
+    if fn is None:
+        raise ValueError(
+            f"Unknown family={family!r}; expected one of "
+            f"{sorted(dispatch)}."
         )
-    if family == "llava_next":
-        return assemble_llava_next(
-            user_prompt, trajectory, image, processor,
-            system_prompt=system_prompt, weights=weights,
-        )
-    if family == "internvl2":
-        return assemble_internvl(
-            user_prompt, trajectory, image, processor,
-            system_prompt=system_prompt, weights=weights,
-        )
-    raise NotImplementedError(
-        f"Teacher-forced assembler for family={family!r} not implemented yet."
+    return fn(
+        user_prompt, trajectory, image, processor,
+        system_prompt=system_prompt, weights=weights,
     )

@@ -14,6 +14,7 @@ Periodic checkpoint + optional dev evaluation between epochs.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +23,12 @@ from typing import Any, Callable
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from ..attacks.inner_pgd import InnerPgdConfig, epsilon_for_epoch, run_inner_pgd
+from ..attacks.inner_pgd import (
+    InnerPgdConfig,
+    epsilon_for_epoch,
+    run_inner_pgd,
+    validate_eps_schedule,
+)
 from ..data.collator import TFCollator
 from ..losses.selector import LossCallResult
 from ..trajectory.teacher_force import TeacherForcedBatch
@@ -95,6 +101,9 @@ class AdvTrainer:
         self.scaler = torch.amp.GradScaler(
             self.device.type, enabled=(config.amp_dtype == "fp16")
         )
+        # Surface malformed eps_schedule entries before any training starts —
+        # a typo would otherwise crash mid-epoch and lose progress.
+        validate_eps_schedule(self.config.eps_schedule)
 
     # --- utilities --------------------------------------------------------
 
@@ -151,6 +160,20 @@ class AdvTrainer:
         if x_adv.ndim == 3:
             x_adv = x_adv.unsqueeze(0)
 
+        # PGD divergence (non-finite loss) means run_inner_pgd substituted the
+        # clean image — silently making this micro-batch a clean step. Surface
+        # it as a distinct log event so post-hoc analysis can count how many
+        # adversarial signals were lost during the run, and propagate the
+        # flag into the train_step log via diagnostics.
+        attack_loss_value = float(attack_result.loss_final)
+        attack_diverged = math.isnan(attack_loss_value) or math.isinf(attack_loss_value)
+        if attack_diverged:
+            self._log({
+                "event": "attack_diverged",
+                "epsilon": epsilon,
+                "attack_iterations": int(attack_result.iterations),
+            })
+
         self.model.train(True)
 
         with torch.autocast(device_type=self.device.type, dtype=self._amp_dtype()):
@@ -162,8 +185,9 @@ class AdvTrainer:
             )
 
         diagnostics = {
-            "attack_loss_final": float(attack_result.loss_final),
+            "attack_loss_final": attack_loss_value,
             "attack_iterations": int(attack_result.iterations),
+            "attack_diverged": int(attack_diverged),
             "epsilon": epsilon,
         }
         return loss_out, diagnostics
@@ -203,6 +227,13 @@ class AdvTrainer:
             """
             if state["accum_count"] == 0:
                 return
+            # Under fp16 AMP, gradients carry the loss-scale factor. PyTorch
+            # contract: scale → backward → unscale_ → clip → step → update.
+            # If scaler is disabled (bf16/fp32) unscale_ is a no-op so this
+            # is safe to always call. Skipping unscale_ here would clip the
+            # scaled magnitudes, silently miscalibrating ``grad_clip_norm``
+            # by orders of magnitude under fp16.
+            self.scaler.unscale_(self.optimizer)
             if self.config.grad_clip_norm and self.config.grad_clip_norm > 0:
                 total_norm = torch.nn.utils.clip_grad_norm_(
                     [p for p in self.model.parameters() if p.requires_grad],
@@ -221,6 +252,11 @@ class AdvTrainer:
                     "reason": reason,
                 })
                 self.optimizer.zero_grad(set_to_none=True)
+                # Even though we skip ``scaler.step``, ``update`` must run so
+                # the loss-scale halves on this inf-grad event; otherwise the
+                # scaler stays at the pre-skip scale and every subsequent
+                # micro-batch overflows the same way.
+                self.scaler.update()
                 state["accum_loss_acc"] = 0.0
                 state["accum_count"] = 0
                 return

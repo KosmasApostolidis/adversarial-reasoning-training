@@ -240,7 +240,7 @@ def test_assemble_unknown_family_raises() -> None:
         task_id="t0", model_id="x", seed=0,
         tool_calls=[], final_answer="x", reasoning_trace="",
     )
-    with pytest.raises(NotImplementedError, match="bogus_family"):
+    with pytest.raises(ValueError, match="bogus_family"):
         assemble(
             family="bogus_family",
             user_prompt="p",

@@ -149,6 +149,17 @@ def aggregate(
                 by_metric.setdefault(f"{gate}.{k}", []).append(float(v))
 
     summary = {key: _summarise(vals) for key, vals in by_metric.items()}
+    # Warn once on stderr about each metric that has fewer than two finite
+    # samples — bootstrap CI is undefined and any "headline" derived from
+    # such a metric is a placeholder, not a result. The summary still
+    # carries ``n`` so downstream tools can filter quantitatively.
+    low_n = sorted(k for k, s in summary.items() if int(s.get("n", 0)) < 2)
+    if low_n:
+        print(
+            f"WARN: bootstrap CI undefined for n<2 metrics ({len(low_n)}): "
+            f"{', '.join(low_n[:8])}{' …' if len(low_n) > 8 else ''}",
+            file=sys.stderr,
+        )
     pass_summary = {
         gate: {
             "n_seeds": len(flags),
@@ -165,6 +176,25 @@ def aggregate(
         "summary": summary,
         "gate_pass_rate": pass_summary,
     }
+
+
+def _nan_to_none(obj: Any) -> Any:
+    """Recursively replace ``float('nan')`` with ``None`` for strict-JSON output.
+
+    ``json.dumps`` writes the bare token ``NaN`` by default — valid in
+    JavaScript, illegal under RFC 7159 — and downstream consumers (``jq -e``,
+    pandas with ``allow_nan=False``, R's ``jsonlite``) reject the file. We
+    pre-walk the payload here so the writer can pass ``allow_nan=False``
+    safely; lists and dicts are descended in place-equivalent (returning
+    a new container) to avoid mutating caller-owned structures.
+    """
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: _nan_to_none(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_nan_to_none(v) for v in obj]
+    return obj
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -207,7 +237,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     payload = aggregate(args.seeds, shared_t1=args.shared_t1)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(payload, indent=2) + "\n")
+    # allow_nan=False forces ``json.dumps`` to raise on stray NaN/Inf instead
+    # of writing the JS-only ``NaN`` token; ``_nan_to_none`` first converts
+    # the legitimate "metric undefined for n<2 seeds" NaNs to JSON nulls.
+    args.out.write_text(
+        json.dumps(_nan_to_none(payload), indent=2, allow_nan=False) + "\n"
+    )
     print(f"wrote {args.out}  (n_seeds={payload['n_seeds']}, "
           f"n_metrics={len(payload['summary'])})")
     return 0

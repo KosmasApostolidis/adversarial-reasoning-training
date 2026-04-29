@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 from pathlib import Path
 from typing import Any
@@ -25,11 +24,22 @@ def sha256_json(obj: Any) -> str:
 
 
 def sha256_image(image: Image.Image) -> str:
-    """Hash a PIL image by its raw RGB bytes (size-aware)."""
+    """Hash a PIL image deterministically across PIL/libpng versions.
+
+    The previous implementation rounded the image through PIL's PNG encoder
+    and hashed the resulting bytes — but PNG output drifts with libpng and
+    PIL versions (chunk ordering, default text metadata), which silently
+    invalidates the cache for collaborators on different toolchains. We
+    now hash the raw RGB pixel buffer plus the (width, height) so two
+    visually-identical images always produce the same key regardless of
+    encoder version. NB: this is a different hash than the previous
+    implementation; existing gold caches will rebuild on first miss.
+    """
     rgb = image.convert("RGB")
-    buf = io.BytesIO()
-    rgb.save(buf, format="PNG", optimize=False, compress_level=0)
-    return sha256_bytes(buf.getvalue())
+    h = hashlib.sha256()
+    h.update(f"{rgb.size[0]}x{rgb.size[1]}|".encode("ascii"))
+    h.update(rgb.tobytes())
+    return h.hexdigest()
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1 << 20) -> str:

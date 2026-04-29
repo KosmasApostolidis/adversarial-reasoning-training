@@ -167,6 +167,16 @@ assert_hf_dir() {
   for required in config.json preprocessor_config.json; do
     [[ -s "${dir}/${required}" ]] || missing+=("${required}")
   done
+  # Weight-file presence guard: a truncated upload that copied only the
+  # JSON metadata files but not the weight blobs still passed the old
+  # check, then the runner crashed mid-load and left a 0-byte
+  # records.jsonl that downstream T3/aggregate silently consumed. Require
+  # at least one *.safetensors or *.bin under hf_dir before returning ok.
+  if ! compgen -G "${dir}/*.safetensors" >/dev/null \
+     && ! compgen -G "${dir}/*.bin"         >/dev/null \
+     && ! compgen -G "${dir}/*.pt"          >/dev/null; then
+    missing+=("*.safetensors|*.bin|*.pt")
+  fi
   if (( ${#missing[@]} > 0 )); then
     echo "FAIL [adv1_${alias}/hf_dir]: missing ${missing[*]} under ${dir}" >&2
     echo "       export the seed0 ckpt first: python scripts/ckpt_to_hf_dir.py --src runs/${alias}_main_seed0/ckpt --dst ${dir}" >&2
@@ -190,6 +200,22 @@ seed_dirs_have_data() {
   local dir
   for dir in "$@"; do
     if [[ -s "${dir}/gates/T2.json" || -s "${dir}/gates/T3.json" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Return 0 when at least one seed has a usable ckpt/index.json, 1 when
+# every seed dir is checkpoint-empty. Used to distinguish two failure
+# modes the user-facing summary must NOT conflate:
+#   - "training-not-run"   : no ckpt anywhere yet → user runs `--phases train`
+#   - "gates-missing"      : ckpt exists but T2/T3 not produced → user
+#                            runs `--phases t2,t3` and skips re-training
+seed_dirs_have_ckpt() {
+  local dir
+  for dir in "$@"; do
+    if [[ -s "${dir}/ckpt/index.json" ]]; then
       return 0
     fi
   done
@@ -428,8 +454,16 @@ run_one_model() {
       # behavior, not a regression. Strict mode (no subshell) does
       # propagate the entry.
       if ! seed_dirs_have_data "${SEED_DIRS[@]}"; then
-        echo "WARN: skipping aggregate/${ALIAS} — no training data (see docs/EXPERIMENT_RUNS.md to populate seeds)" >&2
-        PIPELINE_FAILURES+=("aggregate/${ALIAS} (training-not-run)")
+        if seed_dirs_have_ckpt "${SEED_DIRS[@]}"; then
+          # Training succeeded (ckpts on disk) but T2/T3 phases were
+          # skipped or failed — different remedy from "no training yet":
+          # rerunning `--phases t2,t3` is enough, no need to re-train.
+          echo "WARN: skipping aggregate/${ALIAS} — ckpts exist but no gates produced (rerun --phases t2,t3)" >&2
+          PIPELINE_FAILURES+=("aggregate/${ALIAS} (gates-missing)")
+        else
+          echo "WARN: skipping aggregate/${ALIAS} — no training data (see docs/EXPERIMENT_RUNS.md to populate seeds)" >&2
+          PIPELINE_FAILURES+=("aggregate/${ALIAS} (training-not-run)")
+        fi
       else
         isolate "aggregate/${ALIAS}" run python scripts/figures/aggregate_seeds.py \
           --seeds       "${SEED_DIRS[@]}" \
