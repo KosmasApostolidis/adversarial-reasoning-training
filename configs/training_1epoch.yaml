@@ -32,3 +32,4 @@ eval_every: 200
 ckpt_keep: 2                # registry keeps best + latest
 
 metric_for_best: tool_name_acc
+final_save_include_optimizer: false

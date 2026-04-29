@@ -12,10 +12,11 @@ from .pgd_at import PgdAtOutput, pgd_at_loss
 from .trades import TradesOutput, trades_loss
 
 
-@dataclass(frozen=True)
+@dataclass
 class LossConfig:
     defense: str = "trades"  # trades | pgd_at | oaat
-    beta: float = 6.0        # TRADES
+    beta: float = 6.0        # TRADES β; mutated in-place at epoch start when annealing
+    beta_end: float = 3.0    # TRADES β target at final epoch (linear interpolation)
     temperature: float = 2.0  # TRADES
     alpha: float = 0.5       # OAAT
 
@@ -51,6 +52,7 @@ def build_loss(config: LossConfig):
                     "beta": config.beta,
                 },
             )
+        _fn.config = config
         return _fn
 
     if defense == "pgd_at":
@@ -69,6 +71,7 @@ def build_loss(config: LossConfig):
                     "loss_task_adv": float(out.task_adv.detach()),
                 },
             )
+        _fn.config = config
         return _fn
 
     if defense == "oaat":
@@ -91,6 +94,7 @@ def build_loss(config: LossConfig):
                     "alpha": config.alpha,
                 },
             )
+        _fn.config = config
         return _fn
 
     raise ValueError(f"Unknown defense: {config.defense!r}. Expected trades|pgd_at|oaat.")
@@ -106,6 +110,7 @@ def from_cfg_dict(d: dict[str, Any]) -> LossConfig:
     trades_cfg = d.get("trades") or {}
     oaat_cfg = d.get("oaat") or {}
     beta = float(d.get("beta", trades_cfg.get("beta_start", 6.0)))
+    beta_end = float(d.get("beta_end", trades_cfg.get("beta_end", 3.0)))
     temperature = float(d.get("temperature", trades_cfg.get("temperature", 2.0)))
     alpha = float(d.get("alpha", oaat_cfg.get("alpha", 0.5)))
-    return LossConfig(defense=defense, beta=beta, temperature=temperature, alpha=alpha)
+    return LossConfig(defense=defense, beta=beta, beta_end=beta_end, temperature=temperature, alpha=alpha)

@@ -174,10 +174,10 @@ def _main() -> int:
     if args.ckpt is not None:
         load_checkpoint(args.ckpt, model, optimizer=None, map_location=args.device)
 
-    collator = TFCollator(
-        family=vlm.family,
-        processor=getattr(vlm, "processor", None) or vlm.tokenizer,
+    proc_arg = vlm if vlm.family == "internvl2" else (
+        getattr(vlm, "processor", None) or vlm.tokenizer
     )
+    collator = TFCollator(family=vlm.family, processor=proc_arg)
     metadata_csv = data_cfg.get("metadata_csv")
     metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
 

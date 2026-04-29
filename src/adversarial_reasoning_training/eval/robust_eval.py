@@ -122,19 +122,49 @@ def load_records(path: Path) -> list[dict]:
     return records
 
 
-def _drop_nan_metrics(metrics: dict[str, list[float]]) -> dict[str, list[float]]:
+def _drop_nan_metrics(
+    metrics: dict[str, list[float]],
+) -> tuple[dict[str, list[float]], list[str]]:
     """If any per-record value for a metric is NaN, empty its list so
     T3 trips its missing-metric branch instead of running Wilcoxon on
     NaN. This is how ``args_iou`` falls back gracefully when records
     pre-date the trajectory_record schema extension.
+
+    Returns ``(cleaned, dropped_names)`` so callers can surface the
+    dropped metric set to the operator (C5: silent drop made T3
+    pass with quiet evidence loss).
     """
     cleaned: dict[str, list[float]] = {}
+    dropped: list[str] = []
     for key, values in metrics.items():
         if any(math.isnan(v) for v in values):
             cleaned[key] = []
+            dropped.append(key)
         else:
             cleaned[key] = values
-    return cleaned
+    return cleaned, dropped
+
+
+def _drop_nan_metrics_paired(
+    *metric_dicts: dict[str, list[float]],
+) -> tuple[tuple[dict[str, list[float]], ...], list[str]]:
+    """Apply :func:`_drop_nan_metrics` symmetrically across N dicts:
+    a metric is dropped from EVERY dict if ANY dict has a NaN for it.
+    Required for paired comparisons (e.g. baseline vs defended) — the
+    naive per-dict drop produces length-mismatched paired arrays
+    (H1: empty list paired with populated list).
+    """
+    if not metric_dicts:
+        return (), []
+    drop_set: set[str] = set()
+    for d in metric_dicts:
+        for key, values in d.items():
+            if any(math.isnan(v) for v in values):
+                drop_set.add(key)
+    cleaned_all: list[dict[str, list[float]]] = []
+    for d in metric_dicts:
+        cleaned_all.append({k: ([] if k in drop_set else v) for k, v in d.items()})
+    return tuple(cleaned_all), sorted(drop_set)
 
 
 def records_to_per_sample(path: Path) -> dict[str, list[float]]:
@@ -153,7 +183,8 @@ def records_to_per_sample(path: Path) -> dict[str, list[float]]:
         per_record = _record_metrics(record)
         for key in T3_METRICS:
             metrics[key].append(per_record[key])
-    return _drop_nan_metrics(metrics)
+    cleaned, _ = _drop_nan_metrics(metrics)
+    return cleaned
 
 
 def align_per_sample(
@@ -181,9 +212,41 @@ def align_per_sample(
         for metric in T3_METRICS:
             baseline[metric].append(b_metrics[metric])
             defended[metric].append(d_metrics[metric])
-    baseline = _drop_nan_metrics(baseline)
-    defended = _drop_nan_metrics(defended)
+    # Paired drop: a NaN on either side empties the metric on BOTH so
+    # downstream consumers never see a populated list paired with []
+    # (H1: independent drops produce length-mismatched paired arrays).
+    (baseline, defended), _ = _drop_nan_metrics_paired(baseline, defended)
     return baseline, defended, shared_keys
+
+
+def align_per_sample_with_drops(
+    baseline_records: Path,
+    defended_records: Path,
+) -> tuple[
+    dict[str, list[float]],
+    dict[str, list[float]],
+    list[tuple[str, float, str, int]],
+    list[str],
+]:
+    """Like :func:`align_per_sample` but also returns the list of
+    metric names that were dropped due to NaN on either side, so the
+    T3 layer (or its caller) can surface them to the operator and
+    refuse to silently pass with reduced evidence (C5).
+    """
+    base_recs = {_pair_key(r): r for r in load_records(baseline_records)}
+    def_recs = {_pair_key(r): r for r in load_records(defended_records)}
+    shared_keys = sorted(set(base_recs) & set(def_recs))
+
+    baseline: dict[str, list[float]] = {key: [] for key in T3_METRICS}
+    defended: dict[str, list[float]] = {key: [] for key in T3_METRICS}
+    for key in shared_keys:
+        b_metrics = _record_metrics(base_recs[key])
+        d_metrics = _record_metrics(def_recs[key])
+        for metric in T3_METRICS:
+            baseline[metric].append(b_metrics[metric])
+            defended[metric].append(d_metrics[metric])
+    (baseline, defended), dropped = _drop_nan_metrics_paired(baseline, defended)
+    return baseline, defended, shared_keys, dropped
 
 
 def save_per_sample(path: Path, per_sample: dict[str, list[float]]) -> None:

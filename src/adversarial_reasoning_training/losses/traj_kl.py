@@ -51,5 +51,7 @@ def traj_kl(
     mask_b = shift_mask.bool()
     kl_masked = torch.where(mask_b, kl_per_pos, kl_per_pos.new_zeros(()))
     weighted = kl_masked * (temperature * temperature)
-    denom = shift_mask.sum().clamp_min(1.0)
+    # Do NOT clamp: empty traj_mask must produce NaN so the trainer's
+    # finite-loss guard catches it (see task_ce.py for rationale).
+    denom = shift_mask.sum()
     return weighted.sum() / denom

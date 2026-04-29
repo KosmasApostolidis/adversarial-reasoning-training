@@ -63,7 +63,7 @@ class ScheduleConfig:
 def build_scheduler(
     optimizer: torch.optim.Optimizer, cfg: ScheduleConfig
 ) -> torch.optim.lr_scheduler._LRScheduler:
-    warmup_steps = max(1, int(cfg.warmup_pct * cfg.total_steps))
+    warmup_steps = max(1, math.ceil(cfg.warmup_pct * cfg.total_steps))
 
     def _lr(step: int) -> float:
         if step < warmup_steps:

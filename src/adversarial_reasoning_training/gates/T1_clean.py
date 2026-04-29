@@ -261,10 +261,10 @@ def _main() -> int:
 
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
-    collator = TFCollator(
-        family=vlm.family,
-        processor=getattr(vlm, "processor", None) or vlm.tokenizer,
+    proc_arg = vlm if vlm.family == "internvl2" else (
+        getattr(vlm, "processor", None) or vlm.tokenizer
     )
+    collator = TFCollator(family=vlm.family, processor=proc_arg)
     metadata_csv = data_cfg.get("metadata_csv")
     metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
 

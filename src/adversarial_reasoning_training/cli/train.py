@@ -14,6 +14,7 @@ hard-coded paths.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 from typing import Any
 
@@ -83,15 +84,22 @@ def main(argv: list[str] | None = None) -> int:
 
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
+    # InternVL2 ships no formal HF processor — pass the wrapper itself so the
+    # teacher-force assembler can reach .preprocess_image / .tokenizer /
+    # ._num_image_token. Qwen + LLaVA-NeXT use their AutoProcessor as before.
+    if vlm.family == "internvl2":
+        proc_arg: Any = vlm
+    else:
+        proc_arg = getattr(vlm, "processor", None) or vlm.tokenizer
     collator = TFCollator(
         family=vlm.family,
-        processor=getattr(vlm, "processor", None) or vlm.tokenizer,
+        processor=proc_arg,
     )
     metadata_csv = data_cfg.get("metadata_csv")
     metadata_lookup = (
         load_metadata_csv(metadata_csv) if metadata_csv else {}
     )
-    n_train = train_cfg.get("smoke_max_samples") or data_cfg.get("n_train")
+    n_train = data_cfg.get("n_train")
     train_ds = ProstateXTrainDS(
         task_id=data_cfg["task_id"],
         split=data_cfg.get("train_split", "train"),
@@ -112,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         lr_vit=train_cfg["lr"]["vit"],
     )
     optimizer = build_optimizer(model, optim_cfg)
-    total_steps = train_cfg["epochs"] * max(1, len(train_ds) // train_cfg["grad_accum"])
+    total_steps = train_cfg["epochs"] * max(1, math.ceil(len(train_ds) / train_cfg["grad_accum"]))
     scheduler = build_scheduler(
         optimizer,
         ScheduleConfig(
@@ -122,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
-    loss_fn = build_loss(from_cfg_dict({"defense": train_cfg.get("defense", "trades"), **defense_cfg}))
+    loss_fn = build_loss(from_cfg_dict({**defense_cfg, "defense": train_cfg.get("defense", "trades")}))
 
     trainer_cfg = TrainerConfig(
         epochs=train_cfg["epochs"],

@@ -28,6 +28,16 @@ def seed_everything(seed: int, *, deterministic: bool = True) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+    # transformers maintains its own RNG layer used by .generate() and
+    # some tokenizer fast paths; missing this leaks non-determinism
+    # into T1/T3 evaluations even when torch+numpy+random are seeded.
+    try:
+        from transformers import set_seed as hf_set_seed  # type: ignore
+    except ImportError:
+        pass
+    else:
+        hf_set_seed(seed)
+
     if deterministic:
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True

@@ -45,5 +45,10 @@ def task_ce(
     ce = torch.nan_to_num(ce, nan=0.0, posinf=0.0, neginf=0.0)
     mask_b = shift_mask.bool()
     weighted = torch.where(mask_b, ce, ce.new_zeros(()))
-    denom = shift_mask.sum().clamp_min(1.0)
+    # Do NOT clamp the divisor: an all-zero mask (degenerate batch —
+    # all OBSERVATION/PAD/SYSTEM tokens, or a truncation that dropped
+    # the answer span) must surface as NaN so the trainer's finite-loss
+    # guard skips and logs the bad batch instead of silently reporting
+    # 0.0 loss from clamp_min(1.0).
+    denom = shift_mask.sum()
     return weighted.sum() / denom

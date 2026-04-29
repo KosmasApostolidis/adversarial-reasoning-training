@@ -26,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-from ..eval.robust_eval import align_per_sample, save_per_sample
+from ..eval.robust_eval import align_per_sample_with_drops, save_per_sample
 from ..gates.T3_robust import T3Thresholds, run_t3
 from .runtime import setup_run_dir
 
@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = setup_run_dir(args.out_dir)
 
-    baseline, defended, shared = align_per_sample(
+    baseline, defended, shared, dropped = align_per_sample_with_drops(
         args.baseline_records, args.defended_records
     )
     if not shared:
@@ -72,6 +72,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if dropped:
+        print(
+            f"NOTE: {len(dropped)} metric(s) dropped due to NaN on either side: "
+            f"{', '.join(dropped)}",
+            file=sys.stderr,
+        )
 
     save_per_sample(out_dir / "baseline_per_sample.json", baseline)
     save_per_sample(out_dir / "defended_per_sample.json", defended)
@@ -85,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             alpha=args.alpha,
             min_significant_metrics=args.min_significant_metrics,
         ),
+        dropped_metrics=dropped,
     )
     payload = result.to_dict()
     payload["n_paired"] = len(shared)

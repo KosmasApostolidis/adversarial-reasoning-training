@@ -105,16 +105,52 @@ def run_inner_pgd(
     return result
 
 
+def validate_eps_schedule(schedule: list[dict[str, Any]] | None) -> None:
+    """Fail-fast on a malformed ε schedule before training starts.
+
+    Each entry must declare ``epoch_range: [lo, hi]`` and ``eps: <float>``.
+    A typo (``epoch_ranges``) or missing key would otherwise crash mid-epoch
+    inside ``epsilon_for_epoch`` and waste H200-hours of training progress.
+    Call this once at trainer startup with the schedule from defenses.yaml.
+    """
+    if not schedule:
+        return
+    for i, entry in enumerate(schedule):
+        if "epoch_range" not in entry:
+            raise ValueError(
+                f"eps_schedule[{i}] missing 'epoch_range' key (got keys: "
+                f"{sorted(entry.keys())}). Each entry needs "
+                f"{{'epoch_range': [lo, hi], 'eps': <float>}}."
+            )
+        if "eps" not in entry:
+            raise ValueError(
+                f"eps_schedule[{i}] missing 'eps' key (got keys: "
+                f"{sorted(entry.keys())})."
+            )
+        rng = entry["epoch_range"]
+        if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
+            raise ValueError(
+                f"eps_schedule[{i}].epoch_range must be a 2-element list, "
+                f"got {rng!r}."
+            )
+
+
 def epsilon_for_epoch(
     epoch: int, schedule: list[dict[str, Any]], default_eps: float = 4.0 / 255.0
 ) -> float:
     """Resolve the ε value for the current epoch from the YAML schedule.
 
     Each schedule entry has ``{"epoch_range": [lo, hi], "eps": <float>}``.
-    If no entry matches, returns `default_eps`.
+    If no entry matches, returns `default_eps`. Malformed entries are
+    skipped defensively; ``validate_eps_schedule`` should be called at
+    trainer startup to surface those bugs before mid-epoch crashes.
     """
     for entry in schedule or []:
-        lo, hi = entry["epoch_range"]
+        rng = entry.get("epoch_range")
+        eps = entry.get("eps")
+        if rng is None or eps is None or len(rng) != 2:
+            continue
+        lo, hi = rng
         if lo <= epoch <= hi:
-            return float(entry["eps"])
+            return float(eps)
     return default_eps
