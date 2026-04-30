@@ -121,6 +121,5 @@ markers = [
     "unit: marks tests as fast unit tests",
     "slow: marks tests as slow (GPU/model loading)",
     "gpu: marks tests that require a CUDA GPU",
-    "smoke: marks tests as smoke tests (quick sanity)",
     "integration: marks tests as integration (needs attacks repo importable)",
 ]

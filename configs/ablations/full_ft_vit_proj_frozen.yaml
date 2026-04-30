@@ -1,0 +1,16 @@
+# Ablation: freeze axis — vision tower + projector frozen.
+#
+# Diff vs configs/full_ft.yaml: freeze_strategy = vit_only freezes the
+# ViT encoder. Projector + LM remain trainable. Use this cell to
+# isolate the contribution of vision-stack adaptation.
+# Pass via `--full-ft configs/ablations/full_ft_vit_proj_frozen.yaml`.
+
+freeze_strategy: vit_only   # none | vit_only | projector_only | lm_only
+modules_to_save: all
+
+memory:
+  grad_checkpoint_lm: true
+  grad_checkpoint_vit: true
+  flash_attn: true
+  peak_memory_limit_gb: 120.0
+  fall_back_to_zero1: false

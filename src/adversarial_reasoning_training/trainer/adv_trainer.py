@@ -174,8 +174,6 @@ class AdvTrainer:
                 "attack_iterations": int(attack_result.iterations),
             })
 
-        self.model.train(True)
-
         with torch.autocast(device_type=self.device.type, dtype=self._amp_dtype()):
             logits_clean = self._forward_logits(batch, pixel_values)
             logits_adv = self._forward_logits(batch, x_adv)

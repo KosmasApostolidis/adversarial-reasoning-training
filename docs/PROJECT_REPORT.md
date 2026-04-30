@@ -180,9 +180,6 @@ itself still passes because it pivots on `loss_total`, not
 
 Figures rendered from these artifacts live in `figures/`:
 
-- `fig01_smoke_loss.png` — loss curves
-- `fig02_smoke_grad_mem.png` — grad-norm + GPU memory headroom
-- `fig03_smoke_attack.png` — APGD inner-loop dynamics
 - `fig04_gates_summary.png` — T0 grad-norm breakdown + T1 thresholds
 
 ## 7. What's next

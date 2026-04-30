@@ -30,16 +30,13 @@ pip install -e .[flash]
 # 1. Generate gold trajectories from ProstateX metadata
 python scripts/make_gold_trajectories.py --config configs/gold.yaml
 
-# 2. Smoke run (5 steps, ~2 min)
-python scripts/train.py --config configs/smoke_train.yaml
-
-# 3. Gate T0 — env sanity + mem probe
+# 2. Gate T0 — env sanity + mem probe
 python -m adversarial_reasoning_training.gates.T0_env --model qwen2_5_vl_7b
 
-# 4. Full adversarial training on Qwen
+# 3. Full adversarial training on Qwen
 python scripts/train.py --config configs/training.yaml --model qwen2_5_vl_7b
 
-# 5. Robust eval vs undefended baseline (uses attacks repo runner)
+# 4. Robust eval vs undefended baseline (uses attacks repo runner)
 python scripts/eval_robust.py --ckpt runs/<timestamp>/final/ckpt.pt
 ```
 
