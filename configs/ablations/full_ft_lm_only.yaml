@@ -1,0 +1,15 @@
+# Ablation: freeze axis — only the language head trains.
+#
+# Diff vs configs/full_ft.yaml: freeze_strategy = lm_only (vision tower
+# and projector frozen).
+# Pass via `--full-ft configs/ablations/full_ft_lm_only.yaml` to art-train.
+
+freeze_strategy: lm_only    # none | vit_only | projector_only | lm_only
+modules_to_save: all
+
+memory:
+  grad_checkpoint_lm: true
+  grad_checkpoint_vit: true
+  flash_attn: true
+  peak_memory_limit_gb: 120.0
+  fall_back_to_zero1: false

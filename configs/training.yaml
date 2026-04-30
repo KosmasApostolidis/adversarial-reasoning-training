@@ -8,7 +8,7 @@
 defense: trades             # trades | pgd_at | oaat
 seed: 0
 
-epochs: 5
+epochs: 5                   # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..5)
 micro_batch: 1
 grad_accum: 8               # effective batch size = 8
 
@@ -30,5 +30,6 @@ grad_clip_norm: 1.0
 log_every: 20
 eval_every: 200
 ckpt_keep: 2                # registry keeps best + latest
+final_save_include_optimizer: false   # weights-only; prevents disk-full on 7B
 
 metric_for_best: tool_name_acc
