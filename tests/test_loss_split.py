@@ -46,6 +46,62 @@ def test_trades_decomposes() -> None:
     assert out.beta == beta
 
 
+def test_trades_default_task_weight_preserves_canonical_total() -> None:
+    """Default `task_weight` must be 1.0 — i.e. omitting the kwarg
+    reproduces canonical TRADES so existing trained checkpoints and the
+    β sweep stay byte-identical after the knob landed."""
+    lc, la, ids, tm, trm = _toy()
+    beta = 4.0
+    explicit_one = trades_loss(
+        lc, la, ids, tm, trm, beta=beta, temperature=2.0, task_weight=1.0,
+    )
+    omitted = trades_loss(lc, la, ids, tm, trm, beta=beta, temperature=2.0)
+    assert torch.allclose(explicit_one.total, omitted.total)
+
+
+def test_trades_task_weight_zero_strips_clean_ce() -> None:
+    """`task_weight=0` ⇒ total = β·kl (the "pure trajectory-KL" novelty
+    ablation). `task` field is still computed and reported, just unweighted."""
+    lc, la, ids, tm, trm = _toy()
+    beta = 4.0
+    out = trades_loss(
+        lc, la, ids, tm, trm, beta=beta, temperature=2.0, task_weight=0.0,
+    )
+    expected_total = beta * traj_kl(lc, la, trm, temperature=2.0)
+    assert torch.allclose(expected_total, out.total)
+    assert out.task.item() == task_ce(lc, ids, tm).item()  # still computed
+    assert out.beta == beta
+
+
+def test_trades_task_weight_scales_ce_linearly() -> None:
+    """A non-trivial task_weight scales ONLY the CE term — the KL term
+    is unaffected. Sanity-check via a half-weight cell."""
+    lc, la, ids, tm, trm = _toy()
+    beta = 4.0
+    half = trades_loss(
+        lc, la, ids, tm, trm, beta=beta, temperature=2.0, task_weight=0.5,
+    )
+    expected_total = 0.5 * task_ce(lc, ids, tm) + beta * traj_kl(
+        lc, la, trm, temperature=2.0,
+    )
+    assert torch.allclose(half.total, expected_total)
+
+
+def test_trades_task_weight_zero_no_clean_branch_gradient_via_total() -> None:
+    """With task_weight=0 the clean logits should receive zero gradient
+    from the total loss (the KL term already detaches them; the CE term
+    is the only path back to clean logits, and it's now zero-weighted)."""
+    lc, la, ids, tm, trm = _toy()
+    beta = 4.0
+    out = trades_loss(
+        lc, la, ids, tm, trm, beta=beta, temperature=2.0, task_weight=0.0,
+    )
+    out.total.backward()
+    assert lc.grad is None or torch.all(lc.grad == 0.0), (
+        "task_weight=0 must remove the clean-CE gradient pull on logits_clean"
+    )
+
+
 def test_traj_kl_zero_when_logits_equal() -> None:
     lc, _, _, _, trm = _toy()
     kl = traj_kl(lc, lc.detach().clone(), trm, temperature=2.0)
