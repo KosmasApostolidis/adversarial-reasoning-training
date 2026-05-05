@@ -1,0 +1,42 @@
+# Ablation: novelty isolation — pure trajectory-KL, no task CE.
+#
+# Diff vs configs/defenses.yaml: trades.task_weight = 0.0. Keeps the
+# default β schedule (6.0 → 3.0) and the inner-PGD adversary so the only
+# thing removed is the clean-CE term. The remaining objective is
+#   L = β · KL(stop_grad(p_clean) ‖ p_adv)
+# evaluated on the gold trajectory mask, which is exactly the
+# trajectory-consistency signal the project introduces.
+#
+# Tests Tier C #9 from docs/EXPERIMENT_RUNS.md Phase 6: how much of the
+# headline robustness gain comes from segment alignment vs final-answer
+# CE? Expect a substantial drop in clean accuracy (T2 may fail the 3pp
+# tolerance on tool_name_acc / answer_em); the question is whether
+# robustness deltas survive.
+#
+# Pass via `--defenses configs/ablations/loss_traj_only.yaml` to
+# art-train. The selector reads `trades.task_weight` via
+# `losses/selector.py::from_cfg_dict`.
+
+pgd:
+  eps_schedule:
+    - {epoch_range: [1, 2], eps: 0.0078}    # 2/255
+    - {epoch_range: [3, 3], eps: 0.0157}    # 4/255
+    - {epoch_range: [4, 5], eps: 0.0314}    # 8/255
+  default_eps: 0.0157
+  alpha_ratio: 0.25
+  steps: 7
+  refresh_K: 1
+  eval_eps: [0.0157, 0.0314]
+  eval_steps: 40
+
+trades:
+  beta_start: 6.0
+  beta_end: 3.0
+  temperature: 2.0
+  task_weight: 0.0                          # << novelty ablation knob
+
+pgd_at:
+  # no extra knobs
+
+oaat:
+  alpha: 0.5
