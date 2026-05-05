@@ -18,6 +18,7 @@ class LossConfig:
     beta: float = 6.0        # TRADES β; mutated in-place at epoch start when annealing
     beta_end: float = 3.0    # TRADES β target at final epoch (linear interpolation)
     temperature: float = 2.0  # TRADES
+    task_weight: float = 1.0  # TRADES: weight on the clean-CE term (set 0 for pure traj-KL ablation)
     alpha: float = 0.5       # OAAT
 
 
@@ -42,6 +43,7 @@ def build_loss(config: LossConfig):
                 logits_clean, logits_adv, input_ids,
                 task_mask, traj_mask,
                 beta=config.beta, temperature=config.temperature,
+                task_weight=config.task_weight,
             )
             return LossCallResult(
                 total=out.total,
@@ -50,6 +52,7 @@ def build_loss(config: LossConfig):
                     "loss_task": float(out.task.detach()),
                     "loss_kl": float(out.kl.detach()),
                     "beta": config.beta,
+                    "task_weight": config.task_weight,
                 },
             )
         _fn.config = config
@@ -112,5 +115,13 @@ def from_cfg_dict(d: dict[str, Any]) -> LossConfig:
     beta = float(d.get("beta", trades_cfg.get("beta_start", 6.0)))
     beta_end = float(d.get("beta_end", trades_cfg.get("beta_end", 3.0)))
     temperature = float(d.get("temperature", trades_cfg.get("temperature", 2.0)))
+    task_weight = float(d.get("task_weight", trades_cfg.get("task_weight", 1.0)))
     alpha = float(d.get("alpha", oaat_cfg.get("alpha", 0.5)))
-    return LossConfig(defense=defense, beta=beta, beta_end=beta_end, temperature=temperature, alpha=alpha)
+    return LossConfig(
+        defense=defense,
+        beta=beta,
+        beta_end=beta_end,
+        temperature=temperature,
+        task_weight=task_weight,
+        alpha=alpha,
+    )

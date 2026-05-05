@@ -28,7 +28,14 @@ ABLATIONS = CONFIGS / "ablations"
 
 LOSS_AXIS_FILES = ("loss_oaat.yaml", "loss_pgd_at.yaml")
 BETA_AXIS_FILES = ("beta_0.yaml", "beta_1.yaml", "beta_12.yaml")
-DEFENSES_AXIS_FILES = BETA_AXIS_FILES + ("defenses_eps_fixed_8.yaml",)
+EPS_AXIS_FILES = (
+    "defenses_eps_fixed_8.yaml",
+    "defenses_eps_reverse.yaml",
+    "defenses_eps_mid_only.yaml",
+)
+# Phase 6 Tier C #9 — pure-trajectory-KL novelty isolation.
+TRAJ_ONLY_FILE = "loss_traj_only.yaml"
+DEFENSES_AXIS_FILES = BETA_AXIS_FILES + EPS_AXIS_FILES + (TRAJ_ONLY_FILE,)
 FREEZE_AXIS_FILES = ("full_ft_lm_only.yaml", "full_ft_vit_proj_frozen.yaml")
 
 TRAINING_REQUIRED_KEYS = {
@@ -121,6 +128,70 @@ def test_eps_fixed_8_collapses_to_single_step() -> None:
     only = schedule[0]
     assert only["eps"] == pytest.approx(0.0314)
     assert cfg["pgd"]["default_eps"] == pytest.approx(0.0314)
+
+
+def test_eps_mid_only_collapses_to_single_step_at_mid_budget() -> None:
+    """Phase 6 Tier C #11 — constant 4/255 across all epochs."""
+    cfg = load_yaml(ABLATIONS / "defenses_eps_mid_only.yaml")
+    schedule = cfg["pgd"]["eps_schedule"]
+    assert len(schedule) == 1, "mid-only ablation must use a single schedule entry"
+    only = schedule[0]
+    assert only["eps"] == pytest.approx(0.0157)
+    assert cfg["pgd"]["default_eps"] == pytest.approx(0.0157)
+
+
+def test_eps_reverse_inverts_baseline_curriculum(baseline_defenses: dict) -> None:
+    """Phase 6 Tier C #11 — reverse curriculum must visit the same eps
+    values as the baseline forward curriculum but in inverted order so
+    epoch 1 uses the strongest budget instead of the weakest."""
+    cfg = load_yaml(ABLATIONS / "defenses_eps_reverse.yaml")
+    sched = cfg["pgd"]["eps_schedule"]
+    base_eps_in_order = [e["eps"] for e in baseline_defenses["pgd"]["eps_schedule"]]
+    reverse_eps_in_order = [e["eps"] for e in sched]
+    assert reverse_eps_in_order == list(reversed(base_eps_in_order)), (
+        "defenses_eps_reverse.yaml must mirror baseline eps values in reverse "
+        "(strict 8/255 → 4/255 → 2/255)"
+    )
+    # Epoch ranges must still cover [1, training.epochs] without gaps.
+    covered = set()
+    for entry in sched:
+        lo, hi = entry["epoch_range"]
+        covered.update(range(lo, hi + 1))
+    base_covered = set()
+    for entry in baseline_defenses["pgd"]["eps_schedule"]:
+        lo, hi = entry["epoch_range"]
+        base_covered.update(range(lo, hi + 1))
+    assert covered == base_covered, (
+        f"defenses_eps_reverse.yaml epoch coverage {covered} differs from baseline {base_covered}; "
+        "reverse curriculum would silently fall back to default_eps for uncovered epochs"
+    )
+
+
+def test_loss_traj_only_zeros_trades_task_weight() -> None:
+    """Phase 6 Tier C #9 — the novelty-isolation cell must declare
+    `trades.task_weight = 0`. Anything else (including default 1.0)
+    would silently re-introduce the clean-CE term and confound the
+    "pure trajectory-KL" claim."""
+    cfg = load_yaml(ABLATIONS / TRAJ_ONLY_FILE)
+    trades_block = cfg.get("trades") or {}
+    assert "task_weight" in trades_block, (
+        f"{TRAJ_ONLY_FILE}: trades.task_weight must be set explicitly to 0.0; "
+        "missing key would default to 1.0 and reproduce canonical TRADES"
+    )
+    assert trades_block["task_weight"] == pytest.approx(0.0)
+
+
+def test_loss_traj_only_keeps_canonical_eps_curriculum(
+    baseline_defenses: dict,
+) -> None:
+    """The traj-only cell varies only the loss term — its ε schedule
+    must match the baseline forward curriculum so the ablation isolates
+    `task_weight` rather than confounding it with an ε change."""
+    cfg = load_yaml(ABLATIONS / TRAJ_ONLY_FILE)
+    base_pgd = baseline_defenses["pgd"]
+    assert cfg["pgd"]["eps_schedule"] == base_pgd["eps_schedule"]
+    assert cfg["pgd"]["default_eps"] == base_pgd["default_eps"]
+    assert cfg["pgd"]["steps"] == base_pgd["steps"]
 
 
 @pytest.mark.parametrize("name", FREEZE_AXIS_FILES)

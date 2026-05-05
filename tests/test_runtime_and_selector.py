@@ -138,3 +138,46 @@ def test_from_cfg_dict_defaults_when_empty() -> None:
     assert cfg.beta == 6.0
     assert cfg.temperature == 2.0
     assert cfg.alpha == 0.5
+    assert cfg.task_weight == 1.0
+
+
+def test_lossconfig_default_task_weight_is_one() -> None:
+    """Default LossConfig() must keep canonical TRADES (task_weight=1.0).
+    Anything else would silently mutate already-trained ckpts' loss math."""
+    assert LossConfig().task_weight == 1.0
+
+
+def test_from_cfg_dict_reads_nested_trades_task_weight() -> None:
+    cfg = from_cfg_dict({
+        "defense": "trades",
+        "trades": {"beta_start": 6.0, "task_weight": 0.0},
+    })
+    assert cfg.task_weight == 0.0
+    assert cfg.beta == 6.0
+
+
+def test_from_cfg_dict_flat_task_weight_overrides_nested() -> None:
+    """Flat-shape keys win over nested, matching how `beta` and
+    `temperature` resolve in `from_cfg_dict`."""
+    cfg = from_cfg_dict({
+        "defense": "trades",
+        "task_weight": 0.5,
+        "trades": {"task_weight": 0.0},
+    })
+    assert cfg.task_weight == 0.5
+
+
+def test_build_loss_trades_propagates_task_weight() -> None:
+    """Setting task_weight=0 on the config must change the closure's
+    output total — proving the value flows through `build_loss` to
+    `trades_loss`, not just into `LossConfig`."""
+    fn_one = build_loss(LossConfig(defense="trades", beta=4.0, task_weight=1.0))
+    fn_zero = build_loss(LossConfig(defense="trades", beta=4.0, task_weight=0.0))
+    lc, la, ids, tm = _logits(), _logits(), _ids(), _mask_all_ones()
+    out_one = fn_one(lc, la, ids, tm, tm)
+    out_zero = fn_zero(lc, la, ids, tm, tm)
+    # canonical = task + 4·kl; pure-traj-KL = 4·kl. Difference must equal task.
+    diff = float((out_one.total - out_zero.total).detach())
+    assert diff == pytest.approx(out_one.components["loss_task"], rel=1e-5)
+    assert out_zero.components["task_weight"] == 0.0
+    assert out_one.components["task_weight"] == 1.0

@@ -939,3 +939,393 @@ python scripts/ckpt_to_hf_dir.py \
 After export, rerun `scripts/run_pipeline.sh` end-to-end. The seed-degeneracy
 decision above must be resolved before treating the resulting "5-seed
 defended" rows as real.
+
+---
+
+## Phase 6 — Reviewer-defence runs (Tiers A / C / D)
+
+Phases 0–5 cover the headline + ablation matrix. Phase 6 batches the
+extra cells that close the three "out of scope" limitations stated in
+`docs/PROJECT_OVERVIEW.md` §3.4 and isolate the project's novelty
+claim. Each subsection is independently runnable; pick whichever is
+cheapest given the remaining compute budget.
+
+Decision required before launching any of 6A.* (the seed-degeneracy
+issue from `Phase R` applies here too — `runner.py` still does not
+accept `--seed`, so attack-side records are seed-invariant unless
+Option 1 / 2 / 3 from that section is resolved).
+
+| Subsection | Tier ref | Trains? | New code in this repo | Cross-repo dep |
+|---|---|---|---|---|
+| 6A.1 Adaptive PGD                  | A#1  | no  | no  | attacks-repo: new attack class + experiment YAML |
+| 6A.2 AutoAttack / BPDA spot-check  | A#2  | no  | no  | attacks-repo: AutoAttack/BPDA wrappers |
+| 6A.3 `target-step-k` sweep         | A#3  | no  | no  | none (existing runner flag) |
+| 6A.4 `target-tool` sweep           | A#4  | no  | no  | none (existing runner flag) |
+| 6C.1 Pure traj-KL                  | C#9  | yes | done (`task_weight` knob in `losses/trades.py`) + `configs/ablations/loss_traj_only.yaml` | none |
+| 6C.2 ε reverse / mid-only          | C#11 | yes | `configs/ablations/defenses_eps_{reverse,mid_only}.yaml` | none |
+| 6C.3 TeCoA / FARE encoder-only AT  | C#10 | yes | new training mode (vision-encoder-only AT) — TBD | none |
+| 6D.1 Robustness-vs-budget curve    | D#12 | no  | new figure script — TBD | none |
+| 6D.2 Per-tool flip confusion mat.  | D#13 | no  | new figure script — TBD | none |
+| 6D.3 Compute-vs-robustness pareto  | D#14 | no  | extend `compute_summary.py` — TBD | none |
+
+### 6A.1 Adaptive PGD (defense-aware attacker)
+
+**Goal.** Replace the standard PGD attacker (which maximises only
+`task_ce(adv)`) with one that maximises the same objective the defense
+minimises: `task_ce(adv) + β · KL(p_clean ‖ p_adv)` for TRADES, or
+`task_ce(adv)` weighted by the freeze-strategy mask for OAAT/PGD-AT.
+Closes `docs/PROJECT_OVERVIEW.md` §3.4 limitation 1
+("defense-aware adaptive attackers").
+
+> ⚠️ Not yet in repo (sibling): `adversarial-reasoning-attacks/src/adversarial_reasoning/attacks/pgd_adaptive_trades.py`
+> implementing `AdaptiveTradesPGDAttack(PGDAttack)` that overrides
+> `_inner_loss` to add the KL-to-clean-logits term. Plus
+> `adversarial-reasoning-attacks/configs/attacks_adaptive.yaml`
+> selecting that attack class. The training side needs no changes —
+> all defended ckpts can be re-evaluated.
+
+```bash
+# Per model, after Phase 1/3/4 5-seed adv-FT runs exist.
+for ALIAS in qwen llava internvl2; do
+  for SEED in 0 1 2 3 4; do
+    cd ../adversarial-reasoning-attacks
+    python -m adversarial_reasoning.runner \
+      --config         configs/experiments/defended_${ALIAS}.yaml \
+      --attacks-config configs/attacks_adaptive.yaml \
+      --split          test \
+      --max-steps      8 \
+      --pgd-steps      40 \
+      --target-tool    escalate_to_specialist \
+      --target-step-k  0 \
+      --out            ../adversarial-reasoning-training/runs/${ALIAS}_main_seed${SEED}/records_adaptive.jsonl
+    cd -
+
+    art-eval-robust \
+      --baseline-records         runs/baseline_${ALIAS}/records.jsonl \
+      --defended-records         runs/${ALIAS}_main_seed${SEED}/records_adaptive.jsonl \
+      --out-dir                  runs/${ALIAS}_main_seed${SEED}/gates_adaptive/ \
+      --alpha                    0.05 \
+      --min-traj-edit-delta      0.10 \
+      --min-significant-metrics  3
+  done
+done
+```
+
+**Exit criterion.** A second T3-style table per model: defended-vs-baseline
+under the adaptive attacker. The acceptable outcome is *some* drop in
+`traj_edit_delta` (otherwise the adaptive term is doing nothing); the
+unacceptable outcome is the defense collapsing to baseline performance,
+which would indicate gradient masking. Report both numbers in the
+paper's "adaptive attack" appendix.
+
+### 6A.2 AutoAttack + BPDA spot-check
+
+**Goal.** Establish that the robustness gain is not a PGD-specific
+artefact. Closes `docs/PROJECT_OVERVIEW.md` §3.4 limitation 2
+("non-PGD attack families").
+
+> ⚠️ Not yet in repo (sibling): `adversarial-reasoning-attacks/src/adversarial_reasoning/attacks/autoattack.py`
+> wrapping `torchattacks.AutoAttack` (or the official `autoattack`
+> package) at the same VLM-image interface PGDAttack uses. Plus
+> `attacks/bpda.py` for the BPDA gradient approximator. Two new
+> `configs/attacks_{autoattack,bpda}.yaml` selecting them.
+
+Run on N=50 test samples per model only — these attacks are 5–10x
+slower than PGD and a representative sample is sufficient for a
+robustness footnote.
+
+```bash
+for ATTACK in autoattack bpda; do
+  for ALIAS in qwen llava internvl2; do
+    cd ../adversarial-reasoning-attacks
+    python -m adversarial_reasoning.runner \
+      --config         configs/experiments/defended_${ALIAS}.yaml \
+      --attacks-config configs/attacks_${ATTACK}.yaml \
+      --split          test \
+      --max-steps      8 \
+      --pgd-steps      40 \
+      --target-tool    escalate_to_specialist \
+      --target-step-k  0 \
+      --n              50 \
+      --out            ../adversarial-reasoning-training/runs/${ALIAS}_main_seed0/records_${ATTACK}.jsonl
+    cd -
+  done
+done
+```
+
+**Exit criterion.** Per-attack defended-vs-baseline `traj_edit_delta`
+in a paper appendix table. No significance test (N=50 is too small);
+report raw deltas only.
+
+### 6A.3 `target-step-k` sweep (deeper-step robustness)
+
+**Goal.** The whole "trajectory-aware" pitch claims robustness *along*
+the trajectory, not only at step 0. Eval-only sweep — no retraining.
+
+```bash
+for K in 0 2 4; do
+  for ALIAS in qwen llava internvl2; do
+    cd ../adversarial-reasoning-attacks
+    python -m adversarial_reasoning.runner \
+      --config         configs/experiments/defended_${ALIAS}.yaml \
+      --attacks-config configs/attacks.yaml \
+      --split          test \
+      --max-steps      8 \
+      --pgd-steps      20 \
+      --target-tool    escalate_to_specialist \
+      --target-step-k  ${K} \
+      --out            ../adversarial-reasoning-training/runs/${ALIAS}_main_seed0/records_step${K}.jsonl
+    cd -
+
+    art-eval-robust \
+      --baseline-records         runs/baseline_${ALIAS}/records.jsonl \
+      --defended-records         runs/${ALIAS}_main_seed0/records_step${K}.jsonl \
+      --out-dir                  runs/${ALIAS}_main_seed0/gates_step${K}/ \
+      --alpha                    0.05 \
+      --min-traj-edit-delta      0.10 \
+      --min-significant-metrics  3
+  done
+done
+```
+
+**Exit criterion.** A `step_k`-vs-`traj_edit_delta` curve per model.
+Hypothesis: traj-KL training keeps the curve flat; encoder-only AT
+or final-answer-only AT drops sharply with k.
+
+### 6A.4 `target-tool` sweep (tool-catalog generalization)
+
+**Goal.** Establish the defense isn't `escalate_to_specialist`-specific.
+
+> ⚠️ Confirm with `adversarial_reasoning.tasks.tools` which tools the
+> ProstateX `prostate_mri_workup` task exposes before launching. The
+> two listed below (`request_t2_lookup`, `query_segmentation`) are the
+> illustrative names from `docs/PROJECT_OVERVIEW.md`; substitute the
+> actual registered tool ids.
+
+```bash
+for TOOL in escalate_to_specialist request_t2_lookup query_segmentation; do
+  for ALIAS in qwen llava internvl2; do
+    cd ../adversarial-reasoning-attacks
+    python -m adversarial_reasoning.runner \
+      --config         configs/experiments/defended_${ALIAS}.yaml \
+      --attacks-config configs/attacks.yaml \
+      --split          test \
+      --max-steps      8 \
+      --pgd-steps      20 \
+      --target-tool    ${TOOL} \
+      --target-step-k  0 \
+      --out            ../adversarial-reasoning-training/runs/${ALIAS}_main_seed0/records_tool_${TOOL}.jsonl
+    cd -
+  done
+done
+```
+
+**Exit criterion.** A small per-model table with one row per target
+tool, columns = the four T3 metrics. Headline number is the *worst*
+`traj_edit_delta` across tools — that's the honest claim.
+
+### 6C.1 Pure trajectory-KL (novelty isolation)
+
+**Goal.** Strip the clean-CE term and keep only the trajectory-KL
+regulariser. Tier C #9 from the brainstorm. Already wired:
+`configs/ablations/loss_traj_only.yaml` sets `trades.task_weight = 0.0`,
+which is read in `losses/selector.py::from_cfg_dict` and forwarded to
+`losses/trades.py::trades_loss` (default 1.0 preserves canonical
+TRADES, so existing tests + trained ckpts are unchanged).
+
+```bash
+for SEED in 0 1 2 3 4; do
+  art-train \
+    --config       configs/training.yaml \
+    --defenses     configs/ablations/loss_traj_only.yaml \
+    --data         configs/data.yaml \
+    --gold         configs/gold.yaml \
+    --full-ft      configs/full_ft.yaml \
+    --model        qwen2_5_vl_7b \
+    --run-dir      runs/qwen_abl_traj_only_seed${SEED} \
+    --device       cuda \
+    --seed         ${SEED} \
+    --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
+done
+# Then run Phase 1's runner + art-eval-robust + aggregate snippet,
+# swapping --inputs and --out.
+```
+
+**Expected outcome.** T2 may fail (clean accuracy can collapse without
+the CE pull); T3 should still show non-trivial `traj_edit_delta`. The
+delta vs canonical TRADES quantifies how much robustness is
+attributable to trajectory-segment alignment alone — the project's
+novel contribution.
+
+**Exit criterion.** `results/qwen_abl_traj_only/aggregate.json` exists
+with paired delta vs the Phase 1 reference cell.
+
+### 6C.2 ε reverse + mid-only schedules
+
+**Goal.** Triangulate the curriculum question. The existing axis 2d
+compares forward (2→4→8) vs constant 8/255. Adding constant 4/255 and
+reverse (8→4→2) lets the paper claim curriculum *direction* matters,
+not just curriculum *presence*.
+
+```bash
+for SCHED in reverse mid_only; do
+  for SEED in 0 1 2 3 4; do
+    art-train \
+      --config       configs/training.yaml \
+      --defenses     configs/ablations/defenses_eps_${SCHED}.yaml \
+      --data         configs/data.yaml \
+      --gold         configs/gold.yaml \
+      --full-ft      configs/full_ft.yaml \
+      --model        qwen2_5_vl_7b \
+      --run-dir      runs/qwen_abl_eps_${SCHED}_seed${SEED} \
+      --device       cuda \
+      --seed         ${SEED} \
+      --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
+  done
+done
+```
+
+**Exit criterion.** Two more rows in the Phase 2d ε-schedule table:
+`reverse` and `mid_only`, each with paired delta vs forward curriculum.
+
+### 6C.3 TeCoA / FARE encoder-only adversarial fine-tuning
+
+**Goal.** Head-to-head against the canonical "harden the vision encoder
+in isolation" baseline (`docs/PROJECT_OVERVIEW.md` §2.2). Tests the
+trajectory-aware-AT-beats-encoder-only-AT claim explicitly.
+
+> ⚠️ Not yet in repo: a new training mode `--full-ft configs/ablations/full_ft_vit_only.yaml`
+> already exists in spirit (its sister `vit_proj_frozen.yaml` freezes the
+> ViT) but TeCoA/FARE need an additional knob: the *outer* loss is
+> contrastive on the vision encoder embedding (TeCoA) or unsupervised on
+> the vision encoder embedding (FARE), not task-CE on the LM logits.
+> Implementing this requires adding a new defense selector
+> (`defense: tecoa | fare`) in `losses/selector.py` plus the matching
+> contrastive / unsupervised loss modules. Out of scope for the current
+> sprint; keep the cell in the runbook so it can be picked up cheaply
+> when the LM-only-loss assumption is relaxed.
+
+Once the new selector lands:
+
+```bash
+for METHOD in tecoa fare; do
+  for SEED in 0 1 2 3 4; do
+    art-train \
+      --config       configs/ablations/loss_${METHOD}.yaml \
+      --defenses     configs/defenses.yaml \
+      --data         configs/data.yaml \
+      --gold         configs/gold.yaml \
+      --full-ft      configs/ablations/full_ft_vit_only.yaml \
+      --model        qwen2_5_vl_7b \
+      --run-dir      runs/qwen_abl_${METHOD}_seed${SEED} \
+      --device       cuda \
+      --seed         ${SEED} \
+      --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
+  done
+done
+```
+
+### 6D.1 Robustness-vs-attack-budget curve
+
+**Goal.** Replace single robustness numbers with a curve. For the same
+defended ckpt, sweep eval-time PGD steps ∈ {1, 5, 10, 20, 40}; plot
+`traj_edit_delta` (and the other three T3 metrics) as a function of
+attack budget.
+
+> ⚠️ Not yet in repo: `scripts/figures/make_budget_curve.py`. Expected
+> interface: `--inputs <records_pgd${S}.jsonl>... --baseline <jsonl> --out <png>`.
+
+```bash
+for S in 1 5 10 20 40; do
+  cd ../adversarial-reasoning-attacks
+  python -m adversarial_reasoning.runner \
+    --config         configs/experiments/defended_qwen.yaml \
+    --attacks-config configs/attacks.yaml \
+    --split          test \
+    --max-steps      8 \
+    --pgd-steps      ${S} \
+    --target-tool    escalate_to_specialist \
+    --target-step-k  0 \
+    --out            ../adversarial-reasoning-training/runs/qwen_main_seed0/records_pgd${S}.jsonl
+  cd -
+done
+
+python scripts/figures/make_budget_curve.py \
+  --inputs   runs/qwen_main_seed0/records_pgd{1,5,10,20,40}.jsonl \
+  --baseline runs/baseline_qwen/records.jsonl \
+  --out      figures/fig_budget_curve_qwen.png
+```
+
+**Exit criterion.** Single PNG per model showing the four T3 metrics
+on the y-axis and PGD-steps on the x-axis. Defended curves should
+plateau; baseline curves should drop monotonically.
+
+### 6D.2 Per-tool flip confusion matrix
+
+**Goal.** Diagnostic figure showing *where* tool flips go. From the
+existing per-sample `records.jsonl` (no extra runs), aggregate
+`tool_called_baseline → tool_called_defended` into a confusion matrix.
+
+> ⚠️ Not yet in repo: `scripts/figures/make_tool_confusion.py`. Expected
+> interface: `--baseline <jsonl> --defended <jsonl> --out <png>`.
+
+```bash
+python scripts/figures/make_tool_confusion.py \
+  --baseline runs/baseline_qwen/records.jsonl \
+  --defended runs/qwen_main_seed0/records.jsonl \
+  --out      figures/fig_tool_confusion_qwen.png
+```
+
+**Exit criterion.** A K×K heatmap (K = tool catalog size) per model;
+diagonal mass = correct tool retained, off-diagonal mass = where the
+attack pushes the tool call. Goes in the qualitative-analysis section.
+
+### 6D.3 Compute-vs-robustness pareto
+
+**Goal.** A single scatter showing compute (H200 hours) on x and
+`traj_edit_delta` on y, one point per loss-family / freeze / β cell.
+Lets the paper recommend a "best bang per H200-hour" cell.
+
+> ⚠️ Not yet in repo: extend `scripts/figures/compute_summary.py` (or
+> add `scripts/figures/make_pareto.py`) to ingest per-run wall-time +
+> per-run aggregate.json and emit the scatter.
+
+```bash
+python scripts/figures/make_pareto.py \
+  --runs       runs/ \
+  --aggregates results/qwen_abl_*/aggregate.json results/qwen_main/aggregate.json \
+  --out        figures/fig_pareto_qwen.png
+```
+
+**Exit criterion.** Single PNG with one point per Phase 2 cell + the
+Phase 1 reference, x = wall-time hours, y = `traj_edit_delta`,
+error bars = std across 5 seeds.
+
+---
+
+## Phase 6 compute budget
+
+| Subsection | Trains? | Eval invocations | Notes |
+|---|---|---:|---|
+| 6A.1 Adaptive PGD             | no  | 15 | 3 models × 5 seeds; ~2 h each at pgd_steps=40 |
+| 6A.2 AutoAttack/BPDA          | no  |  6 | 3 models × 2 attacks × N=50; slow |
+| 6A.3 step-k sweep             | no  |  9 | 3 models × 3 step values, seed 0 only |
+| 6A.4 target-tool sweep        | no  |  9 | 3 models × 3 tools, seed 0 only |
+| 6C.1 Pure traj-KL             | yes |  5 | Qwen × 5 seeds (~8 h each) |
+| 6C.2 ε reverse + mid-only     | yes | 10 | Qwen × 2 schedules × 5 seeds |
+| 6C.3 TeCoA / FARE             | yes | 10 | Qwen × 2 methods × 5 seeds; **gated on selector code** |
+| 6D.1 Budget curve             | no  |  5 | Qwen × 5 PGD-steps |
+| 6D.2 Tool confusion           | no  |  0 | reuses existing records |
+| 6D.3 Compute pareto           | no  |  0 | reuses existing aggregates |
+| **Subtotal (no TeCoA)**       |     | ~49 invocations + 15 training runs |
+
+At ~8 h / training run + ~2 h / eval invocation on a single H200, Phase 6
+without 6C.3 sequential ≈ 220 h. Most of the gain (Tier A + Tier C #9 +
+Tier C #11 + all of Tier D) is reachable for under that budget.
+
+**Recommended ordering** when launching:
+1. 6D.2 + 6D.3 first — zero new training, only figure scripts.
+2. 6A.3 + 6A.4 — eval-only, depend only on existing defended ckpts.
+3. 6C.1 + 6C.2 — three new training cells; reuse the Phase 1 seed loop.
+4. 6A.1 — gated on attacks-repo code.
+5. 6A.2 + 6C.3 — gated on additional implementation; defer.

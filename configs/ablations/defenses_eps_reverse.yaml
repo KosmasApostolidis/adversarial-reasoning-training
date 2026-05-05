@@ -1,0 +1,34 @@
+# Ablation: epsilon schedule — reverse curriculum 8/255 → 4/255 → 2/255.
+#
+# Diff vs configs/defenses.yaml: pgd.eps_schedule entries are inverted
+# in time (strongest budget first, weakest last). Tests whether the
+# OAAT/Madry-style ramp-up is load-bearing or whether the model can
+# decay from worst-case adversary to clean and still converge.
+#
+# Reference cell: configs/defenses.yaml (forward curriculum 2 → 4 → 8).
+# Sister cell:    configs/ablations/defenses_eps_fixed_8.yaml (constant 8).
+#
+# Pass via `--defenses configs/ablations/defenses_eps_reverse.yaml`.
+
+pgd:
+  eps_schedule:
+    - {epoch_range: [1, 2], eps: 0.0314}    # 8/255 — strongest first
+    - {epoch_range: [3, 3], eps: 0.0157}    # 4/255
+    - {epoch_range: [4, 5], eps: 0.0078}    # 2/255 — weakest last
+  default_eps: 0.0157
+  alpha_ratio: 0.25
+  steps: 7
+  refresh_K: 1
+  eval_eps: [0.0157, 0.0314]
+  eval_steps: 40
+
+trades:
+  beta_start: 6.0
+  beta_end: 3.0
+  temperature: 2.0
+
+pgd_at:
+  # no extra knobs
+
+oaat:
+  alpha: 0.5
