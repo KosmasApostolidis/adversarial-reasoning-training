@@ -1,0 +1,21 @@
+# Pre-commit hooks for adversarial-reasoning-training.
+#
+# Install:
+#   pre-commit install
+# Run on all files (one-off):
+#   pre-commit run --all-files
+#
+# Only ruff is wired up here. mypy stays out of the hook chain until the
+# baseline error count is cleared — running it on every commit while the
+# count is non-zero would be noise, not signal. Promote to a hook in a
+# follow-up PR after src/ is mypy-clean.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^(src|tests)/
+      - id: ruff-format
+        files: ^(src|tests)/

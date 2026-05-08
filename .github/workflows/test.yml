@@ -1,0 +1,50 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package + dev extras (CPU torch)
+        # The trainer pulls in torch + adversarial-reasoning (sibling repo)
+        # which require GPU + custom wheels in production. CI only needs to
+        # exercise the pure-Python paths exercised by the fast test set, so
+        # we install the dev extras and skip the heavy GPU stack via
+        # `pytest -m 'not slow'`. If torch import fails, the affected tests
+        # error out rather than silently skipping — caught in code review.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cpu
+
+      # --- required gates ---
+
+      - name: ruff (required)
+        run: ruff check src tests
+
+      - name: pytest (required, skip slow)
+        run: pytest -m 'not slow' --maxfail=1 --tb=short
+
+      # --- advisory gates: report failures, do not fail CI ---
+      # mypy has a non-zero baseline (15 errors) that should be cleared in a
+      # follow-up PR before this gate is promoted to required.
+
+      - name: mypy (advisory)
+        continue-on-error: true
+        run: python -m mypy src
