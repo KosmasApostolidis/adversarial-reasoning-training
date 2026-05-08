@@ -23,12 +23,13 @@ from adversarial_reasoning.attacks.base import AttackResult
 from adversarial_reasoning.attacks.pgd import PGDAttack
 
 from ..trajectory.teacher_force import TeacherForcedBatch
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 
 
 @dataclass(frozen=True)
 class InnerPgdConfig:
-    epsilon: float = 4.0 / 255.0
-    alpha_ratio: float = 0.25
+    epsilon: float = EPS_4_255
+    alpha_ratio: float = DEFAULT_PGD_ALPHA_RATIO
     steps: int = 7
     random_restarts: int = 1
 
@@ -135,7 +136,7 @@ def validate_eps_schedule(schedule: list[dict[str, Any]] | None) -> None:
 
 
 def epsilon_for_epoch(
-    epoch: int, schedule: list[dict[str, Any]], default_eps: float = 4.0 / 255.0
+    epoch: int, schedule: list[dict[str, Any]], default_eps: float = EPS_4_255
 ) -> float:
     """Resolve the ε value for the current epoch from the YAML schedule.
 

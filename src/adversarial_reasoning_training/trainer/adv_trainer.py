@@ -33,6 +33,7 @@ from ..attacks.inner_pgd import (
 from ..data.collator import TFCollator
 from ..losses.selector import LossCallResult
 from ..trajectory.teacher_force import TeacherForcedBatch
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
 from .ckpt import CheckpointRegistry
 
@@ -47,8 +48,8 @@ class TrainerConfig:
     grad_clip_norm: float = 1.0
     amp_dtype: str = "bf16"  # bf16 | fp16 | fp32
     eps_schedule: list[dict[str, Any]] | None = None
-    default_epsilon: float = 4.0 / 255.0
-    alpha_ratio: float = 0.25
+    default_epsilon: float = EPS_4_255
+    alpha_ratio: float = DEFAULT_PGD_ALPHA_RATIO
     pgd_steps: int = 7
     run_dir: Path = Path("runs/default")
     final_save_include_optimizer: bool = True

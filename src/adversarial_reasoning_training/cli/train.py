@@ -32,6 +32,7 @@ from ..trainer.optim import (
     build_optimizer,
     build_scheduler,
 )
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from .config import load_yaml
 from .runtime import setup_seed
 
@@ -141,8 +142,8 @@ def main(argv: list[str] | None = None) -> int:
         grad_clip_norm=train_cfg.get("grad_clip_norm", 1.0),
         amp_dtype=train_cfg.get("amp", "bf16"),
         eps_schedule=defense_cfg["pgd"].get("eps_schedule"),
-        default_epsilon=defense_cfg["pgd"].get("default_eps", 4.0 / 255.0),
-        alpha_ratio=defense_cfg["pgd"].get("alpha_ratio", 0.25),
+        default_epsilon=defense_cfg["pgd"].get("default_eps", EPS_4_255),
+        alpha_ratio=defense_cfg["pgd"].get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
         pgd_steps=defense_cfg["pgd"].get("steps", 7),
         run_dir=args.run_dir,
         final_save_include_optimizer=train_cfg.get(

@@ -28,6 +28,7 @@ from ..attacks.inner_pgd import InnerPgdConfig, run_inner_pgd
 from ..data.collator import TFCollator
 from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.freeze import _LM_PATTERNS, _PROJECTOR_PATTERNS, _VIT_PATTERNS
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
 
 
@@ -69,7 +70,7 @@ def run_t0(
     peak_memory_limit_gb: float = 120.0,
     device: str = "cuda",
     amp_dtype: torch.dtype = torch.bfloat16,
-    epsilon: float = 4.0 / 255.0,
+    epsilon: float = EPS_4_255,
     pgd_steps: int = 3,
 ) -> T0Result:
     """Run the T0 environment gate.
@@ -90,7 +91,10 @@ def run_t0(
 
     model.train(False)
     inner_cfg = InnerPgdConfig(
-        epsilon=epsilon, alpha_ratio=0.25, steps=pgd_steps, random_restarts=1
+        epsilon=epsilon,
+        alpha_ratio=DEFAULT_PGD_ALPHA_RATIO,
+        steps=pgd_steps,
+        random_restarts=1,
     )
     pixel_values = batch.forward_kwargs["pixel_values"].to(device_t)
     attack_result = run_inner_pgd(vlm, pixel_values, batch, inner_cfg)
@@ -182,7 +186,7 @@ def _main() -> int:
     )
     parser.add_argument("--out", type=Path, default=Path("runs/t0/gates/T0.json"))
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--epsilon", type=float, default=4.0 / 255.0)
+    parser.add_argument("--epsilon", type=float, default=EPS_4_255)
     parser.add_argument("--pgd-steps", type=int, default=3)
     args = parser.parse_args()
 
