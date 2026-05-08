@@ -37,17 +37,19 @@ def _load_script(name: str) -> Any:
     return mod
 
 
-@pytest.fixture()
+# Module scope: each script module is read-only (loaded once, never mutated
+# across tests). Per-function reload was wasted I/O on every test.
+@pytest.fixture(scope="module")
 def aggregate_seeds_mod() -> Any:
     return _load_script("aggregate_seeds")
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def compute_summary_mod() -> Any:
     return _load_script("compute_summary")
 
 
-@pytest.fixture()
+@pytest.fixture(scope="module")
 def make_figures_mod() -> Any:
     return _load_script("make_figures")
 

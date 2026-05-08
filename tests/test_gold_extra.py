@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from adversarial_reasoning.agents.base import ToolCall, Trajectory  # type: ignore
+
 from adversarial_reasoning_training.gold.expert_probe import (
     load_expert_probe,
     save_expert_probe,
@@ -30,7 +30,6 @@ from adversarial_reasoning_training.gold.templates import (
     template_pirads_5,
     template_post_treatment,
 )
-
 
 # -------------------- pick_template_name branches --------------------
 

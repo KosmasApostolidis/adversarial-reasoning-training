@@ -17,7 +17,6 @@ Two bugs the current implementation would silently exhibit:
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 
 import pytest
@@ -164,7 +163,7 @@ def test_align_per_sample_with_drops_exposes_dropped_set(
         "robust_eval must expose align_per_sample_with_drops so callers "
         "(cli/eval_robust.py, T3 gate) can record dropped metric names"
     )
-    b, d, shared, dropped = re_mod.align_per_sample_with_drops(
+    b, d, _shared, dropped = re_mod.align_per_sample_with_drops(
         baseline_path, defended_path
     )
     assert "args_iou" in dropped

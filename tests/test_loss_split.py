@@ -7,8 +7,8 @@ import torch
 from adversarial_reasoning_training.losses.oaat import oaat_loss
 from adversarial_reasoning_training.losses.pgd_at import pgd_at_loss
 from adversarial_reasoning_training.losses.task_ce import task_ce
-from adversarial_reasoning_training.losses.traj_kl import traj_kl
 from adversarial_reasoning_training.losses.trades import trades_loss
+from adversarial_reasoning_training.losses.traj_kl import traj_kl
 
 
 def _toy() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -23,7 +23,7 @@ def _toy() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torc
 
 
 def test_pgd_at_equals_task_ce_on_adv() -> None:
-    lc, la, ids, tm, _ = _toy()
+    _lc, la, ids, tm, _ = _toy()
     direct = task_ce(la, ids, tm)
     via_loss = pgd_at_loss(la, ids, tm)
     assert torch.allclose(direct, via_loss.total)

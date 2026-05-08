@@ -42,7 +42,10 @@ set -uo pipefail
 APPLY=0
 MODELS_CSV="qwen,llava,internvl2"
 SEEDS_CSV="0,1,2,3,4"
-PHASES_CSV="gold,t0,t1,baseline,train,t2,t3,aggregate,figures,compute"
+# Single source of truth for valid phases. Used as the default --phases CSV,
+# echoed in the help text, and used to validate user-supplied --phases values.
+PHASES_ALL=(gold t0 t1 baseline train t2 t3 aggregate figures compute)
+PHASES_CSV="$(IFS=,; echo "${PHASES_ALL[*]}")"
 SKIP_EXISTING=0
 DEVICE="cuda"
 GPU=""
@@ -85,6 +88,21 @@ fi
 IFS=',' read -r -a MODELS <<< "$MODELS_CSV"
 IFS=',' read -r -a SEEDS  <<< "$SEEDS_CSV"
 IFS=',' read -r -a PHASES <<< "$PHASES_CSV"
+
+# Reject unknown --phases values up front. Without this an unknown phase like
+# "trian" silently never matches phase_enabled() and the user wonders why the
+# pipeline produced no output. Validate against PHASES_ALL.
+for _phase in "${PHASES[@]}"; do
+  _ok=0
+  for _valid in "${PHASES_ALL[@]}"; do
+    [[ "$_phase" == "$_valid" ]] && { _ok=1; break; }
+  done
+  if [[ "$_ok" -eq 0 ]]; then
+    echo "ERROR: unknown --phases value '$_phase' (valid: ${PHASES_ALL[*]})" >&2
+    exit 2
+  fi
+done
+unset _phase _valid _ok
 
 # Reject unknown --models aliases up front so a typo (e.g. "qwn") fails fast
 # instead of crashing 30+ s into the trainer with a cryptic registry KeyError
@@ -355,9 +373,13 @@ if phase_enabled gold; then
   # Use that as the skip-existing sentinel — there is no top-level dotfile
   # written by the CLI, so the prior `.gold_cache_done.${SPLIT}` path was
   # never created and --skip-existing silently re-ran the loader every time.
-  # GOLD_CACHE_DIR mirrors configs/gold.yaml:cache_dir; update both together
-  # when the cache moves.
-  GOLD_CACHE_DIR="data/gold"
+  # Read cache_dir directly from configs/gold.yaml so the shell and YAML
+  # cannot drift.
+  GOLD_CACHE_DIR="$(python -c 'import sys, yaml; print(yaml.safe_load(open("configs/gold.yaml"))["cache_dir"])')"
+  if [[ -z "$GOLD_CACHE_DIR" ]]; then
+    echo "ERROR: configs/gold.yaml is missing required key cache_dir" >&2
+    exit 2
+  fi
   for SPLIT in train dev test; do
     SENTINEL="${GOLD_CACHE_DIR}/_summary_${SPLIT}.json"
     if skip_if_exists "$SENTINEL"; then

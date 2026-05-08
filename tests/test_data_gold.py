@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from adversarial_reasoning.agents.base import ToolCall, Trajectory  # type: ignore
 from PIL import Image
 
-from adversarial_reasoning.agents.base import ToolCall, Trajectory  # type: ignore
 from adversarial_reasoning_training.data.gold import (
     gold_exists,
     load_gold,

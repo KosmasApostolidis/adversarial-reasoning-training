@@ -17,7 +17,6 @@ from typing import Any
 
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
 
-
 # Oracle version — bump whenever any template below changes.
 ORACLE_VERSION = "v1"
 

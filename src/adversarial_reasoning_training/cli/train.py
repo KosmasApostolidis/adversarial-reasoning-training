@@ -32,8 +32,16 @@ from ..trainer.optim import (
     build_optimizer,
     build_scheduler,
 )
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from .config import load_yaml
 from .runtime import setup_seed
+from .schema import (
+    validate_data,
+    validate_defenses,
+    validate_full_ft,
+    validate_gold,
+    validate_training,
+)
 
 
 def _build_vlm(model_family: str, models_yaml: Path) -> Any:
@@ -74,6 +82,15 @@ def main(argv: list[str] | None = None) -> int:
     data_cfg = load_yaml(args.data)
     gold_cfg = load_yaml(args.gold)
     ft_cfg = load_yaml(args.full_ft)
+
+    # Fail fast on schema typos before any model loads — a 7B VLM init
+    # is ~30s on H200 and ``adamw_8bit`` would otherwise silently fall
+    # back to the default optim kind (see optim.build_optimizer).
+    validate_training(train_cfg)
+    validate_defenses(defense_cfg)
+    validate_data(data_cfg)
+    validate_gold(gold_cfg)
+    validate_full_ft(ft_cfg)
 
     vlm = _build_vlm(args.model, args.models_yaml)
     model = vlm.model
@@ -141,8 +158,8 @@ def main(argv: list[str] | None = None) -> int:
         grad_clip_norm=train_cfg.get("grad_clip_norm", 1.0),
         amp_dtype=train_cfg.get("amp", "bf16"),
         eps_schedule=defense_cfg["pgd"].get("eps_schedule"),
-        default_epsilon=defense_cfg["pgd"].get("default_eps", 4.0 / 255.0),
-        alpha_ratio=defense_cfg["pgd"].get("alpha_ratio", 0.25),
+        default_epsilon=defense_cfg["pgd"].get("default_eps", EPS_4_255),
+        alpha_ratio=defense_cfg["pgd"].get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
         pgd_steps=defense_cfg["pgd"].get("steps", 7),
         run_dir=args.run_dir,
         final_save_include_optimizer=train_cfg.get(

@@ -5,25 +5,8 @@
 # which provides the lower-bound reference for the beta sweep.
 # Pass via `--defenses configs/ablations/beta_0.yaml` to art-train.
 
-pgd:
-  eps_schedule:
-    - {epoch_range: [1, 2], eps: 0.0078}    # 2/255
-    - {epoch_range: [3, 3], eps: 0.0157}    # 4/255
-    - {epoch_range: [4, 5], eps: 0.0314}    # 8/255
-  default_eps: 0.0157
-  alpha_ratio: 0.25
-  steps: 7
-  refresh_K: 1
-  eval_eps: [0.0157, 0.0314]
-  eval_steps: 40
+_extends: ../defenses.yaml
 
 trades:
   beta_start: 0.0
   beta_end: 0.0
-  temperature: 2.0
-
-pgd_at:
-  # no extra knobs
-
-oaat:
-  alpha: 0.5

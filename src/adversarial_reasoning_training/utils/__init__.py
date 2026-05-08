@@ -1,5 +1,12 @@
-"""Seed, content-hashing, memory probe helpers."""
+"""Seed, content-hashing, memory probe, and shared-constant helpers."""
 
+from .constants import (
+    BYTE_SCALE,
+    DEFAULT_PGD_ALPHA_RATIO,
+    EPS_2_255,
+    EPS_4_255,
+    EPS_8_255,
+)
 from .hashing import (
     gold_cache_key,
     sha256_bytes,
@@ -17,6 +24,11 @@ from .mem import (
 from .seed import seed_everything
 
 __all__ = [
+    "BYTE_SCALE",
+    "DEFAULT_PGD_ALPHA_RATIO",
+    "EPS_2_255",
+    "EPS_4_255",
+    "EPS_8_255",
     "MemoryStats",
     "assert_peak_under",
     "current_memory_stats",
