@@ -35,7 +35,7 @@ def build_optimizer(model: torch.nn.Module, cfg: OptimConfig) -> torch.optim.Opt
         weight_decay=cfg.weight_decay,
     )
     if not pg:
-        raise RuntimeError("No trainable parameter groups; check freeze strategy.")
+        raise ValueError("No trainable parameter groups; check freeze strategy.")
     if cfg.kind == "adamw8bit":
         try:
             import bitsandbytes as bnb
