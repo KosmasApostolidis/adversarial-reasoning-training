@@ -1,0 +1,163 @@
+{
+  "n_seeds": 5,
+  "seed_dirs": [
+    "runs/qwen_main_seed0",
+    "runs/qwen_main_seed1",
+    "runs/qwen_main_seed2",
+    "runs/qwen_main_seed3",
+    "runs/qwen_main_seed4"
+  ],
+  "per_seed": [
+    {
+      "seed_dir": "runs/qwen_main_seed0",
+      "metrics": {
+        "T1": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "answer_em": 1.0
+        },
+        "T2": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "tool_name_acc_drop": 0.0,
+          "answer_em": 1.0,
+          "answer_em_drop": 0.0
+        },
+        "T3": {}
+      }
+    },
+    {
+      "seed_dir": "runs/qwen_main_seed1",
+      "metrics": {
+        "T1": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "answer_em": 1.0
+        },
+        "T2": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "tool_name_acc_drop": 0.0,
+          "answer_em": 1.0,
+          "answer_em_drop": 0.0
+        },
+        "T3": {}
+      }
+    },
+    {
+      "seed_dir": "runs/qwen_main_seed2",
+      "metrics": {
+        "T1": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "answer_em": 1.0
+        },
+        "T2": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "tool_name_acc_drop": 0.0,
+          "answer_em": 1.0,
+          "answer_em_drop": 0.0
+        },
+        "T3": {}
+      }
+    },
+    {
+      "seed_dir": "runs/qwen_main_seed3",
+      "metrics": {
+        "T1": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "answer_em": 1.0
+        },
+        "T2": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "tool_name_acc_drop": 0.0,
+          "answer_em": 1.0,
+          "answer_em_drop": 0.0
+        },
+        "T3": {}
+      }
+    },
+    {
+      "seed_dir": "runs/qwen_main_seed4",
+      "metrics": {
+        "T1": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "answer_em": 1.0
+        },
+        "T2": {
+          "passed": true,
+          "tool_name_acc": 1.0,
+          "tool_name_acc_drop": 0.0,
+          "answer_em": 1.0,
+          "answer_em_drop": 0.0
+        },
+        "T3": {}
+      }
+    }
+  ],
+  "summary": {
+    "T1.tool_name_acc": {
+      "n": 5,
+      "mean": 1.0,
+      "std": 0.0,
+      "ci_lo": 1.0,
+      "ci_hi": 1.0
+    },
+    "T1.answer_em": {
+      "n": 5,
+      "mean": 1.0,
+      "std": 0.0,
+      "ci_lo": 1.0,
+      "ci_hi": 1.0
+    },
+    "T2.tool_name_acc": {
+      "n": 5,
+      "mean": 1.0,
+      "std": 0.0,
+      "ci_lo": 1.0,
+      "ci_hi": 1.0
+    },
+    "T2.tool_name_acc_drop": {
+      "n": 5,
+      "mean": 0.0,
+      "std": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.0
+    },
+    "T2.answer_em": {
+      "n": 5,
+      "mean": 1.0,
+      "std": 0.0,
+      "ci_lo": 1.0,
+      "ci_hi": 1.0
+    },
+    "T2.answer_em_drop": {
+      "n": 5,
+      "mean": 0.0,
+      "std": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.0
+    }
+  },
+  "gate_pass_rate": {
+    "T1": {
+      "n_seeds": 5,
+      "n_passed": 5,
+      "rate": 1.0
+    },
+    "T2": {
+      "n_seeds": 5,
+      "n_passed": 5,
+      "rate": 1.0
+    },
+    "T3": {
+      "n_seeds": 0,
+      "n_passed": 0,
+      "rate": null
+    }
+  }
+}
