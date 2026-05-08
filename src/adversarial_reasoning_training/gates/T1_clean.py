@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..data.collator import TFCollator
 from ..losses.task_ce import task_ce
+from ._common import load_gate_yaml, write_gate_result
 
 
 @dataclass
@@ -140,8 +141,7 @@ def run_t1(
         },
         notes=notes,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result
 
 
@@ -215,7 +215,6 @@ def _main() -> int:
     """
     import argparse
 
-    import yaml
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
     from ..data.dataset import ProstateXTrainDS
@@ -246,14 +245,10 @@ def _main() -> int:
     parser.add_argument("--answer-em-min", type=float, default=0.70)
     args = parser.parse_args()
 
-    def _load(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-
-    data_cfg = _load(args.data)
-    gold_cfg = _load(args.gold)
-    ft_cfg = _load(args.full_ft)
-    train_cfg = _load(args.training)
+    data_cfg = load_gate_yaml(args.data)
+    gold_cfg = load_gate_yaml(args.gold)
+    ft_cfg = load_gate_yaml(args.full_ft)
+    train_cfg = load_gate_yaml(args.training)
 
     vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
     model = vlm.model

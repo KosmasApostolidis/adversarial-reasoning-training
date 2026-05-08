@@ -30,6 +30,7 @@ from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.freeze import _LM_PATTERNS, _PROJECTOR_PATTERNS, _VIT_PATTERNS
 from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
+from ._common import load_gate_yaml, write_gate_result
 
 
 @dataclass
@@ -157,8 +158,7 @@ def run_t0(
         duration_s=time.time() - start,
         notes=notes,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result
 
 
@@ -168,7 +168,6 @@ def _main() -> int:
     """
     import argparse
 
-    import yaml
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
     from ..data.dataset import ProstateXTrainDS
@@ -190,14 +189,10 @@ def _main() -> int:
     parser.add_argument("--pgd-steps", type=int, default=3)
     args = parser.parse_args()
 
-    def _load(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
-
-    defense_cfg = _load(args.defenses)
-    data_cfg = _load(args.data)
-    gold_cfg = _load(args.gold)
-    ft_cfg = _load(args.full_ft)
+    defense_cfg = load_gate_yaml(args.defenses, allow_empty=False)
+    data_cfg = load_gate_yaml(args.data, allow_empty=False)
+    gold_cfg = load_gate_yaml(args.gold, allow_empty=False)
+    ft_cfg = load_gate_yaml(args.full_ft, allow_empty=False)
     defense_cfg.setdefault("defense", "trades")
 
     vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))

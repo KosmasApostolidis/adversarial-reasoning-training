@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ._common import load_gate_yaml, write_gate_result
+
 
 @dataclass
 class T2Thresholds:
@@ -104,8 +106,7 @@ def run_t2(
         },
         notes=notes,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result
 
 
@@ -127,7 +128,6 @@ def _main() -> int:
     import argparse
 
     import torch
-    import yaml
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
     from ..data.collator import TFCollator
@@ -160,12 +160,8 @@ def _main() -> int:
     )
     args = parser.parse_args()
 
-    def _load(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-
-    data_cfg = _load(args.data)
-    gold_cfg = _load(args.gold)
+    data_cfg = load_gate_yaml(args.data)
+    gold_cfg = load_gate_yaml(args.gold)
 
     vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
     model = vlm.model

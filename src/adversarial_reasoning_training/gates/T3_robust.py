@@ -15,13 +15,14 @@ Writes ``runs/<id>/gates/T3.json``.
 
 from __future__ import annotations
 
-import json
 import math
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ._common import write_gate_result
 
 
 @dataclass
@@ -175,6 +176,5 @@ def run_t3(
         notes=notes,
         dropped_metrics=drops,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result
