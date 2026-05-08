@@ -21,8 +21,8 @@ import pytest
 import torch
 
 from adversarial_reasoning_training.losses.task_ce import task_ce
-from adversarial_reasoning_training.losses.traj_kl import traj_kl
 from adversarial_reasoning_training.losses.trades import trades_loss
+from adversarial_reasoning_training.losses.traj_kl import traj_kl
 
 
 @pytest.mark.unit

@@ -26,13 +26,11 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import torch
-from PIL import Image
-
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
+from PIL import Image
 
 from .mask import build_masks, labels_from_input_ids
 from .segments import DEFAULT_MASK_WEIGHTS, MaskWeights, Segment, SegmentKind
-
 
 # --- Qwen2.5-VL chat template literals --------------------------------------
 

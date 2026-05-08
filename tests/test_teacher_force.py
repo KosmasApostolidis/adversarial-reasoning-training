@@ -71,9 +71,9 @@ def test_assemble_llava_next_smoke() -> None:
     pre-expanded slot, BOS prepended, EOS at every turn boundary).
     """
     import torch
+    from adversarial_reasoning.agents.base import ToolCall, Trajectory
     from PIL import Image
 
-    from adversarial_reasoning.agents.base import ToolCall, Trajectory
     from adversarial_reasoning_training.trajectory.teacher_force import assemble
 
     class _StubTokenizer:
@@ -156,9 +156,9 @@ def test_assemble_internvl2_smoke() -> None:
     token closes every assistant/tool/final turn.
     """
     import torch
+    from adversarial_reasoning.agents.base import ToolCall, Trajectory
     from PIL import Image
 
-    from adversarial_reasoning.agents.base import ToolCall, Trajectory
     from adversarial_reasoning_training.trajectory.teacher_force import assemble
 
     class _StubTokenizer:
@@ -230,9 +230,9 @@ def test_assemble_internvl2_smoke() -> None:
 
 
 def test_assemble_unknown_family_raises() -> None:
+    from adversarial_reasoning.agents.base import Trajectory
     from PIL import Image
 
-    from adversarial_reasoning.agents.base import Trajectory
     from adversarial_reasoning_training.trajectory.teacher_force import assemble
 
     image = Image.new("RGB", (32, 32))

@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-
 from adversarial_reasoning.attacks.base import AttackResult
 from adversarial_reasoning.attacks.pgd import PGDAttack
 

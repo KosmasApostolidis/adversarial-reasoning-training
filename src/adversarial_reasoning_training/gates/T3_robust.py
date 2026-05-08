@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 
 @dataclass
@@ -67,7 +68,7 @@ def _wilcoxon_signed_rank(
         from scipy.stats import wilcoxon  # type: ignore
     except ImportError:
         return float("nan"), 1.0
-    diffs = [d - b for b, d in zip(baseline, defended)]
+    diffs = [d - b for b, d in zip(baseline, defended, strict=False)]
     nonzero = [d for d in diffs if d != 0.0]
     if not nonzero:
         return 0.0, 1.0
@@ -122,7 +123,7 @@ def run_t3(
         if not b or not d or len(b) != len(d):
             notes.append(f"{key}: missing or length-mismatched samples; skipped")
             continue
-        mean_delta = sum(di - bi for bi, di in zip(b, d)) / len(b)
+        mean_delta = sum(di - bi for bi, di in zip(b, d, strict=False)) / len(b)
         stat, p = _wilcoxon_signed_rank(b, d)
         per_metric[key] = {
             "baseline_mean": sum(b) / len(b),
@@ -136,9 +137,9 @@ def run_t3(
         metric_keys.append(key)
 
     rejected = _bh_fdr(pvalues, thresholds.alpha)
-    for key, rej in zip(metric_keys, rejected):
+    for key, rej in zip(metric_keys, rejected, strict=False):
         per_metric[key]["significant_bh"] = bool(rej)
-    significant = [k for k, r in zip(metric_keys, rejected) if r]
+    significant = [k for k, r in zip(metric_keys, rejected, strict=False) if r]
 
     passed = True
     traj_metric = per_metric.get("traj_edit_distance", {})
