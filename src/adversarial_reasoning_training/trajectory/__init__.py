@@ -12,7 +12,8 @@ from .segments import (
     Segment,
     SegmentKind,
 )
-from .teacher_force import TeacherForcedBatch, assemble, assemble_qwen
+from .teacher_force import TeacherForcedBatch, assemble
+from .templates import assemble_qwen
 
 __all__ = [
     "DEFAULT_MASK_WEIGHTS",
