@@ -48,7 +48,7 @@ def test_build_optimizer_empty_param_groups_raises() -> None:
     model = _RoleStubModel()
     for p in model.parameters():
         p.requires_grad_(False)
-    with pytest.raises(RuntimeError, match="No trainable parameter groups"):
+    with pytest.raises(ValueError, match="No trainable parameter groups"):
         build_optimizer(model, OptimConfig(kind="adamw"))
 
 

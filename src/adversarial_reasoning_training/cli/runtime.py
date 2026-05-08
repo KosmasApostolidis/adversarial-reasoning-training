@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 
+from ..utils.paths import normalize_run_dir
 from ..utils.seed import seed_everything
 
 
@@ -26,7 +27,5 @@ def setup_device(name: str = "cuda") -> torch.device:
 
 
 def setup_run_dir(path: str | Path) -> Path:
-    """Create the run directory (and parents) and return its ``Path``."""
-    p = Path(path)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    """Create the run directory (and parents) and return its resolved ``Path``."""
+    return normalize_run_dir(path)
