@@ -61,3 +61,90 @@ def test_split_prompt_target_raises_when_no_task() -> None:
     batch.task_mask = torch.zeros_like(batch.task_mask)
     with pytest.raises(ValueError):
         _split_prompt_target(batch)
+
+
+# --- run_inner_pgd ---------------------------------------------------------
+
+
+class _StubAttack:
+    """Stand-in for ``PGDAttack`` whose ``run`` returns a configurable result.
+
+    The test patches the attacks-repo PGDAttack symbol that ``run_inner_pgd``
+    imports, so the wrapper exercises only its own glue logic (split → invoke
+    → finite-image guard) without spinning up the real PGD optimization.
+    """
+
+    def __init__(self, *, perturbed: torch.Tensor, loss_final: float) -> None:
+        self._perturbed = perturbed
+        self._loss_final = loss_final
+
+    @classmethod
+    def make_factory(cls, *, perturbed: torch.Tensor, loss_final: float):
+        def _ctor(**_ignored):
+            return cls(perturbed=perturbed, loss_final=loss_final)
+        return _ctor
+
+    def run(self, **_ignored) -> object:
+        from adversarial_reasoning.attacks.base import AttackResult
+        return AttackResult(
+            perturbed_image=self._perturbed,
+            delta=torch.zeros_like(self._perturbed),
+            loss_final=self._loss_final,
+            loss_trajectory=[self._loss_final],
+            iterations=1,
+            success=True,
+            metadata={},
+        )
+
+
+def test_run_inner_pgd_falls_back_to_clean_when_perturbed_is_nan(
+    monkeypatch,
+) -> None:
+    """If PGD diverges to non-finite pixels, wrapper must substitute the
+    clean image and emit NaN loss so downstream code can flag the event.
+    """
+    from adversarial_reasoning_training.attacks import inner_pgd as ip
+
+    clean = torch.full((1, 3, 8, 8), 0.5)
+    nan_pixels = torch.full_like(clean, float("nan"))
+    monkeypatch.setattr(
+        ip,
+        "PGDAttack",
+        _StubAttack.make_factory(perturbed=nan_pixels, loss_final=0.7),
+    )
+
+    result = ip.run_inner_pgd(
+        vlm=object(),
+        image_tensor=clean,
+        batch=_toy_batch(),
+        config=ip.InnerPgdConfig(epsilon=0.01, steps=1, random_restarts=1),
+    )
+
+    assert torch.equal(result.perturbed_image, clean)
+    import math
+    assert math.isnan(result.loss_final)
+
+
+def test_run_inner_pgd_passes_finite_perturbation_through(monkeypatch) -> None:
+    """Finite perturbed pixels are returned untouched; only NaN/inf trigger
+    the clean-image fallback.
+    """
+    from adversarial_reasoning_training.attacks import inner_pgd as ip
+
+    clean = torch.full((1, 3, 8, 8), 0.5)
+    finite = clean + 0.01
+    monkeypatch.setattr(
+        ip,
+        "PGDAttack",
+        _StubAttack.make_factory(perturbed=finite, loss_final=1.5),
+    )
+
+    result = ip.run_inner_pgd(
+        vlm=object(),
+        image_tensor=clean,
+        batch=_toy_batch(),
+        config=ip.InnerPgdConfig(epsilon=0.01, steps=1, random_restarts=1),
+    )
+
+    assert torch.equal(result.perturbed_image, finite)
+    assert result.loss_final == 1.5

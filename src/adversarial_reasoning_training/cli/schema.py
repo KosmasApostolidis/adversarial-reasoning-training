@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from typing_extensions import NotRequired, TypedDict
+
 from ..attacks.inner_pgd import validate_eps_schedule
 
 VALID_DEFENSES = frozenset({"trades", "pgd_at", "oaat"})
@@ -47,6 +49,46 @@ GOLD_REQUIRED_KEYS = frozenset({"oracle_version", "cache_dir"})
 FULL_FT_REQUIRED_KEYS = frozenset({"freeze_strategy", "memory"})
 
 
+class _LRSpec(TypedDict):
+    lm: float
+    projector: float
+    vit: float
+
+
+class TrainingConfig(TypedDict):
+    """Type-narrowed view of a validated ``training.yaml`` payload.
+
+    Pilot of the broader TypedDict-config rollout flagged in the Phase 4
+    plan. Only the keys ``validate_training`` actually checks are marked
+    required; everything else (``warmup_pct``, ``log_every``, etc.) is
+    ``NotRequired`` so that older configs lacking those knobs still
+    type-narrow without runtime errors. Optional entries continue to
+    carry their original ``train_cfg.get(...)`` defaults at the call
+    sites in ``cli/train.py``.
+    """
+
+    defense: str
+    seed: int
+    epochs: int
+    micro_batch: int
+    grad_accum: int
+    optim: str
+    lr: _LRSpec
+    schedule: str
+    amp: str
+    weight_decay: NotRequired[float]
+    betas: NotRequired[list[float]]
+    warmup_pct: NotRequired[float]
+    grad_ckpt: NotRequired[bool]
+    grad_clip_norm: NotRequired[float]
+    log_every: NotRequired[int]
+    eval_every: NotRequired[int]
+    save_every: NotRequired[int]
+    ckpt_keep: NotRequired[int]
+    metric_for_best: NotRequired[str]
+    final_save_include_optimizer: NotRequired[bool]
+
+
 def _check_missing(label: str, cfg: dict[str, Any], required: frozenset[str]) -> None:
     missing = required - cfg.keys()
     if missing:
@@ -63,12 +105,16 @@ def _check_enum(label: str, key: str, value: Any, valid: frozenset[str]) -> None
         )
 
 
-def validate_training(cfg: dict[str, Any]) -> None:
-    """Validate a ``training.yaml`` payload.
+def validate_training(cfg: dict[str, Any]) -> TrainingConfig:
+    """Validate a ``training.yaml`` payload and narrow its type.
 
     Catches typos like ``defense: tradse`` before they reach the loss
     selector, and ``optim: adamw_8bit`` before the optimizer factory
     silently falls back to a default kind.
+
+    Returns the same ``cfg`` object (no copy) but annotated as
+    :class:`TrainingConfig` so downstream code gets mypy-checked
+    subscripts at sites like ``train_cfg["lr"]["lm"]``.
     """
     _check_missing("training", cfg, TRAINING_REQUIRED_KEYS)
     _check_enum("training", "defense", cfg["defense"], VALID_DEFENSES)
@@ -81,6 +127,7 @@ def validate_training(cfg: dict[str, Any]) -> None:
             f"training.lr: expected dict, got {type(lr).__name__}"
         )
     _check_missing("training.lr", lr, TRAINING_LR_REQUIRED_KEYS)
+    return cfg  # type: ignore[return-value]
 
 
 def validate_defenses(cfg: dict[str, Any]) -> None:

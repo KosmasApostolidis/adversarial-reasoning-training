@@ -77,7 +77,6 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_seed(args.seed)
 
-    train_cfg = load_yaml(args.config)
     defense_cfg = load_yaml(args.defenses)
     data_cfg = load_yaml(args.data)
     gold_cfg = load_yaml(args.gold)
@@ -86,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     # Fail fast on schema typos before any model loads — a 7B VLM init
     # is ~30s on H200 and ``adamw_8bit`` would otherwise silently fall
     # back to the default optim kind (see optim.build_optimizer).
-    validate_training(train_cfg)
+    train_cfg = validate_training(load_yaml(args.config))
     validate_defenses(defense_cfg)
     validate_data(data_cfg)
     validate_gold(gold_cfg)
