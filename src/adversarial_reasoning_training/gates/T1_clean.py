@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..data.collator import TFCollator
 from ..losses.task_ce import task_ce
+from ..utils.constants import VLMFamily
 from ._common import load_gate_yaml, write_gate_result
 
 
@@ -256,7 +257,7 @@ def _main() -> int:
 
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
-    proc_arg = vlm if vlm.family == "internvl2" else (
+    proc_arg = vlm if vlm.family == VLMFamily.INTERNVL2 else (
         getattr(vlm, "processor", None) or vlm.tokenizer
     )
     collator = TFCollator(family=vlm.family, processor=proc_arg)

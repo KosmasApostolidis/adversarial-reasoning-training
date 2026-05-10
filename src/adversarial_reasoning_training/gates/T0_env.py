@@ -28,7 +28,7 @@ from ..attacks.inner_pgd import InnerPgdConfig, run_inner_pgd
 from ..data.collator import TFCollator
 from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.freeze import _LM_PATTERNS, _PROJECTOR_PATTERNS, _VIT_PATTERNS
-from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255, VLMFamily
 from ..utils.mem import current_memory_stats, reset_peak_memory
 from ._common import load_gate_yaml, write_gate_result
 
@@ -202,7 +202,7 @@ def _main() -> int:
     from ..trainer.freeze import FreezeConfig, apply_freeze
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
-    proc_arg = vlm if vlm.family == "internvl2" else (
+    proc_arg = vlm if vlm.family == VLMFamily.INTERNVL2 else (
         getattr(vlm, "processor", None) or vlm.tokenizer
     )
     collator = TFCollator(family=vlm.family, processor=proc_arg)

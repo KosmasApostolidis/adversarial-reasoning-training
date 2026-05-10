@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..utils.constants import VLMFamily
 from ._common import load_gate_yaml, write_gate_result
 
 
@@ -170,7 +171,7 @@ def _main() -> int:
     if args.ckpt is not None:
         load_checkpoint(args.ckpt, model, optimizer=None, map_location=args.device)
 
-    proc_arg = vlm if vlm.family == "internvl2" else (
+    proc_arg = vlm if vlm.family == VLMFamily.INTERNVL2 else (
         getattr(vlm, "processor", None) or vlm.tokenizer
     )
     collator = TFCollator(family=vlm.family, processor=proc_arg)
