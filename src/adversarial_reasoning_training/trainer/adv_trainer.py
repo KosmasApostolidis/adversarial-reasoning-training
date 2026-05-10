@@ -316,86 +316,111 @@ class AdvTrainer:
 
     # --- main loop --------------------------------------------------------
 
-    def fit(self, dataset: Dataset) -> None:
-        loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=self.collator)
-        total_outer = len(loader) * self.config.epochs
-        self._global_step = 0
-        self._accum_loss_acc = 0.0
-        self._accum_count = 0
-        start_time = time.time()
-        reset_peak_memory()
+    def _init_beta_schedule(self) -> tuple[Any, float, float]:
+        """Read TRADES beta annealing endpoints off ``loss_fn.config``.
 
-        last_loss_out: LossCallResult | None = None
-        last_diag: dict[str, float] = {}
-
+        Returns ``(loss_cfg, beta_start, beta_end)``. ``loss_cfg`` is
+        ``None`` when the loss closure exposes no config (gold/teacher-
+        forced gates), in which case both endpoints fall back to 6.0
+        — the historical default that matches the pre-refactor literal.
+        """
         loss_cfg = getattr(self.loss_fn, "config", None)
-        beta_start: float = 6.0
-        beta_end: float = 6.0
-        if loss_cfg is not None:
-            beta_start = loss_cfg.beta
-            beta_end = getattr(loss_cfg, "beta_end", loss_cfg.beta)
+        if loss_cfg is None:
+            return None, 6.0, 6.0
+        return loss_cfg, loss_cfg.beta, getattr(loss_cfg, "beta_end", loss_cfg.beta)
 
-        for epoch in range(1, self.config.epochs + 1):
-            if loss_cfg is not None and self.config.epochs > 1:
-                frac = (epoch - 1) / (self.config.epochs - 1)
-                loss_cfg.beta = beta_start + frac * (beta_end - beta_start)
+    def _anneal_beta(
+        self,
+        loss_cfg: Any,
+        beta_start: float,
+        beta_end: float,
+        epoch: int,
+    ) -> None:
+        """Linear-interpolate ``loss_cfg.beta`` across the run.
 
-            epsilon = epsilon_for_epoch(
-                epoch, self.config.eps_schedule, default_eps=self.config.default_epsilon,
-            )
-            for micro_idx, batch in enumerate(loader):
-                batch_t: TeacherForcedBatch = batch.to(self.device)
-                loss_out, diag = self._outer_step(batch_t, epsilon)
+        No-op when there is no config or only a single epoch (the
+        ``epochs - 1`` denominator would be zero).
+        """
+        if loss_cfg is None or self.config.epochs <= 1:
+            return
+        frac = (epoch - 1) / (self.config.epochs - 1)
+        loss_cfg.beta = beta_start + frac * (beta_end - beta_start)
 
-                # Finite-loss guard: a single bad batch must not poison every
-                # subsequent step. Drop grads for this micro-batch AND reset
-                # the window counter so the next valid micro-batches form a
-                # full grad_accum window before stepping (otherwise the step
-                # would apply on a sub-window with mis-scaled gradient).
-                if not torch.isfinite(loss_out.total):
-                    self._append_log_record({
-                        "event": "skipped_nan_loss",
-                        "global_step": self._global_step,
-                        "epoch": epoch,
-                        "micro_idx": micro_idx,
-                        "accum_count_before_skip": self._accum_count,
-                        **diag,
-                    })
-                    self.optimizer.zero_grad(set_to_none=True)
-                    self._accum_loss_acc = 0.0
-                    self._accum_count = 0
-                    continue
+    def _run_epoch(
+        self,
+        *,
+        epoch: int,
+        loader: DataLoader,
+        epsilon: float,
+        last_loss_out: LossCallResult | None,
+        last_diag: dict[str, float],
+        start_time: float,
+    ) -> tuple[LossCallResult | None, dict[str, float]]:
+        """Run one epoch: micro-batch loop + end-of-epoch drain.
 
-                self.scaler.scale(loss_out.total / self.config.grad_accum).backward()
-                self._accum_loss_acc += float(loss_out.total.detach())
-                self._accum_count += 1
-                last_loss_out, last_diag = loss_out, diag
+        Returns the last (loss_out, diag) seen so the drain can fire on
+        a partial trailing window without re-running ``_outer_step``.
+        """
+        for micro_idx, batch in enumerate(loader):
+            batch_t: TeacherForcedBatch = batch.to(self.device)
+            loss_out, diag = self._outer_step(batch_t, epsilon)
 
-                if self._accum_count >= self.config.grad_accum:
-                    self._apply_optimizer_step(
-                        epoch=epoch,
-                        loss_out=loss_out,
-                        diag=diag,
-                        reason="window_full",
-                        start_time=start_time,
-                    )
+            # Finite-loss guard: a single bad batch must not poison every
+            # subsequent step. Drop grads for this micro-batch AND reset
+            # the window counter so the next valid micro-batches form a
+            # full grad_accum window before stepping (otherwise the step
+            # would apply on a sub-window with mis-scaled gradient).
+            if not torch.isfinite(loss_out.total):
+                self._append_log_record({
+                    "event": "skipped_nan_loss",
+                    "global_step": self._global_step,
+                    "epoch": epoch,
+                    "micro_idx": micro_idx,
+                    "accum_count_before_skip": self._accum_count,
+                    **diag,
+                })
+                self.optimizer.zero_grad(set_to_none=True)
+                self._accum_loss_acc = 0.0
+                self._accum_count = 0
+                continue
 
-            # End-of-epoch drain: trailing micro-batches in a partial
-            # window must be applied before crossing the epoch boundary,
-            # else their grads leak into the next epoch's first window
-            # and the final epoch's tail never updates the model at all.
-            if self._accum_count > 0 and last_loss_out is not None:
+            self.scaler.scale(loss_out.total / self.config.grad_accum).backward()
+            self._accum_loss_acc += float(loss_out.total.detach())
+            self._accum_count += 1
+            last_loss_out, last_diag = loss_out, diag
+
+            if self._accum_count >= self.config.grad_accum:
                 self._apply_optimizer_step(
                     epoch=epoch,
-                    loss_out=last_loss_out,
-                    diag=last_diag,
-                    reason="epoch_end_drain",
+                    loss_out=loss_out,
+                    diag=diag,
+                    reason="window_full",
                     start_time=start_time,
                 )
 
-        global_step = self._global_step
+        # End-of-epoch drain: trailing micro-batches in a partial
+        # window must be applied before crossing the epoch boundary,
+        # else their grads leak into the next epoch's first window
+        # and the final epoch's tail never updates the model at all.
+        if self._accum_count > 0 and last_loss_out is not None:
+            self._apply_optimizer_step(
+                epoch=epoch,
+                loss_out=last_loss_out,
+                diag=last_diag,
+                reason="epoch_end_drain",
+                start_time=start_time,
+            )
+        return last_loss_out, last_diag
 
-        # --- final checkpoint + end-of-training evaluation
+    def _finalize_training(self, *, total_outer: int, start_time: float) -> None:
+        """Final ckpt save + fit_done log + train_meta.json dump.
+
+        Compute-transparency metadata: ``scripts/figures/compute_summary.py``
+        walks each run dir for ``train_meta.json`` to render the H200-
+        hours/peak-GiB LaTeX table. Keys mirror the gate JSON schema so
+        the same reader works across T0/T1/T2/T3 + trainer outputs.
+        """
+        global_step = self._global_step
         metrics = self.evaluator(global_step, self.config.epochs) if self.evaluator else {}
         metric_value = metrics.get(self.metric_for_best) if metrics else None
         self.ckpt.save(
@@ -417,10 +442,6 @@ class AdvTrainer:
             "total_outer": total_outer,
             **final_mem.as_dict(),
         })
-        # Compute-transparency metadata: scripts/figures/compute_summary.py
-        # walks each run dir for this file to render the H200-hours/peak-GiB
-        # LaTeX table. Keys mirror the gate JSON schema so the same reader
-        # works across T0/T1/T2/T3 + trainer outputs.
         meta = {
             "duration_s": duration_s,
             "peak_memory_gb": final_mem.peak_allocated_gb,
@@ -432,3 +453,32 @@ class AdvTrainer:
         }
         meta_path = self.config.run_dir / "train_meta.json"
         meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+
+    def fit(self, dataset: Dataset) -> None:
+        loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=self.collator)
+        total_outer = len(loader) * self.config.epochs
+        self._global_step = 0
+        self._accum_loss_acc = 0.0
+        self._accum_count = 0
+        start_time = time.time()
+        reset_peak_memory()
+
+        last_loss_out: LossCallResult | None = None
+        last_diag: dict[str, float] = {}
+        loss_cfg, beta_start, beta_end = self._init_beta_schedule()
+
+        for epoch in range(1, self.config.epochs + 1):
+            self._anneal_beta(loss_cfg, beta_start, beta_end, epoch)
+            epsilon = epsilon_for_epoch(
+                epoch, self.config.eps_schedule, default_eps=self.config.default_epsilon,
+            )
+            last_loss_out, last_diag = self._run_epoch(
+                epoch=epoch,
+                loader=loader,
+                epsilon=epsilon,
+                last_loss_out=last_loss_out,
+                last_diag=last_diag,
+                start_time=start_time,
+            )
+
+        self._finalize_training(total_outer=total_outer, start_time=start_time)
