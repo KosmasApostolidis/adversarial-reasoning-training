@@ -20,9 +20,7 @@ from typing import Any
 
 import torch
 
-from ..data.collator import TFCollator
-from ..data.dataset import ProstateXTrainDS
-from ..gold.oracle import load_metadata_csv
+from ..gates._common import build_train_dataset, get_collator
 from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.adv_trainer import AdvTrainer, TrainerConfig
 from ..trainer.freeze import FreezeConfig, apply_freeze
@@ -72,25 +70,84 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+def _load_and_validate_configs(
+    args: argparse.Namespace,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Load all five YAMLs and run schema validation.
 
-    setup_seed(args.seed)
-
-    train_cfg = load_yaml(args.config)
+    Fail-fast pattern: every config validates before any model loads —
+    a 7B VLM init is ~30s on H200 and ``adamw_8bit`` would otherwise
+    silently fall back to the default optim kind (see
+    ``optim.build_optimizer``).
+    """
     defense_cfg = load_yaml(args.defenses)
     data_cfg = load_yaml(args.data)
     gold_cfg = load_yaml(args.gold)
     ft_cfg = load_yaml(args.full_ft)
-
-    # Fail fast on schema typos before any model loads — a 7B VLM init
-    # is ~30s on H200 and ``adamw_8bit`` would otherwise silently fall
-    # back to the default optim kind (see optim.build_optimizer).
-    validate_training(train_cfg)
+    train_cfg = validate_training(load_yaml(args.config))
     validate_defenses(defense_cfg)
     validate_data(data_cfg)
     validate_gold(gold_cfg)
     validate_full_ft(ft_cfg)
+    return train_cfg, defense_cfg, data_cfg, gold_cfg, ft_cfg
+
+
+def _build_optim_and_schedule(
+    model: torch.nn.Module,
+    train_cfg: dict[str, Any],
+    train_ds_size: int,
+) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler | None]:
+    optim_cfg = OptimConfig(
+        kind=train_cfg.get("optim", "adamw8bit"),
+        lr_lm=train_cfg["lr"]["lm"],
+        lr_projector=train_cfg["lr"]["projector"],
+        lr_vit=train_cfg["lr"]["vit"],
+    )
+    optimizer = build_optimizer(model, optim_cfg)
+    total_steps = train_cfg["epochs"] * max(
+        1, math.ceil(train_ds_size / train_cfg["grad_accum"])
+    )
+    scheduler = build_scheduler(
+        optimizer,
+        ScheduleConfig(
+            total_steps=total_steps,
+            warmup_pct=train_cfg.get("warmup_pct", 0.03),
+            kind=train_cfg.get("schedule", "cosine"),
+        ),
+    )
+    return optimizer, scheduler
+
+
+def _build_trainer_config(
+    args: argparse.Namespace,
+    train_cfg: dict[str, Any],
+    defense_cfg: dict[str, Any],
+) -> TrainerConfig:
+    pgd_cfg = defense_cfg.get("pgd", {})
+    return TrainerConfig(
+        epochs=train_cfg["epochs"],
+        grad_accum=train_cfg["grad_accum"],
+        log_every=train_cfg.get("log_every", 20),
+        eval_every=train_cfg.get("eval_every", 200),
+        save_every=train_cfg.get("save_every", 0),
+        grad_clip_norm=train_cfg.get("grad_clip_norm", 1.0),
+        amp_dtype=train_cfg.get("amp", "bf16"),
+        eps_schedule=pgd_cfg.get("eps_schedule"),
+        default_epsilon=pgd_cfg.get("default_eps", EPS_4_255),
+        alpha_ratio=pgd_cfg.get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
+        pgd_steps=pgd_cfg.get("steps", 7),
+        run_dir=args.run_dir,
+        final_save_include_optimizer=train_cfg.get(
+            "final_save_include_optimizer", True
+        ),
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    setup_seed(args.seed)
+
+    train_cfg, defense_cfg, data_cfg, gold_cfg, ft_cfg = _load_and_validate_configs(args)
 
     vlm = _build_vlm(args.model, args.models_yaml)
     model = vlm.model
@@ -104,67 +161,17 @@ def main(argv: list[str] | None = None) -> int:
     # InternVL2 ships no formal HF processor — pass the wrapper itself so the
     # teacher-force assembler can reach .preprocess_image / .tokenizer /
     # ._num_image_token. Qwen + LLaVA-NeXT use their AutoProcessor as before.
-    if vlm.family == "internvl2":
-        proc_arg: Any = vlm
-    else:
-        proc_arg = getattr(vlm, "processor", None) or vlm.tokenizer
-    collator = TFCollator(
-        family=vlm.family,
-        processor=proc_arg,
-    )
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = (
-        load_metadata_csv(metadata_csv) if metadata_csv else {}
-    )
-    n_train = data_cfg.get("n_train")
-    train_ds = ProstateXTrainDS(
-        task_id=data_cfg["task_id"],
+    collator = get_collator(vlm)
+    train_ds = build_train_dataset(
+        data_cfg,
+        gold_cfg,
         split=data_cfg.get("train_split", "train"),
-        cache_dir=Path(gold_cfg["cache_dir"]),
-        oracle_version=gold_cfg["oracle_version"],
-        metadata_lookup=metadata_lookup,
-        n=n_train,
-        synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-        ),
+        n=data_cfg.get("n_train"),
     )
 
-    optim_cfg = OptimConfig(
-        kind=train_cfg.get("optim", "adamw8bit"),
-        lr_lm=train_cfg["lr"]["lm"],
-        lr_projector=train_cfg["lr"]["projector"],
-        lr_vit=train_cfg["lr"]["vit"],
-    )
-    optimizer = build_optimizer(model, optim_cfg)
-    total_steps = train_cfg["epochs"] * max(1, math.ceil(len(train_ds) / train_cfg["grad_accum"]))
-    scheduler = build_scheduler(
-        optimizer,
-        ScheduleConfig(
-            total_steps=total_steps,
-            warmup_pct=train_cfg.get("warmup_pct", 0.03),
-            kind=train_cfg.get("schedule", "cosine"),
-        ),
-    )
-
-    loss_fn = build_loss(from_cfg_dict({**defense_cfg, "defense": train_cfg.get("defense", "trades")}))
-
-    trainer_cfg = TrainerConfig(
-        epochs=train_cfg["epochs"],
-        grad_accum=train_cfg["grad_accum"],
-        log_every=train_cfg.get("log_every", 20),
-        eval_every=train_cfg.get("eval_every", 200),
-        save_every=train_cfg.get("save_every", 0),
-        grad_clip_norm=train_cfg.get("grad_clip_norm", 1.0),
-        amp_dtype=train_cfg.get("amp", "bf16"),
-        eps_schedule=defense_cfg["pgd"].get("eps_schedule"),
-        default_epsilon=defense_cfg["pgd"].get("default_eps", EPS_4_255),
-        alpha_ratio=defense_cfg["pgd"].get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
-        pgd_steps=defense_cfg["pgd"].get("steps", 7),
-        run_dir=args.run_dir,
-        final_save_include_optimizer=train_cfg.get(
-            "final_save_include_optimizer", True
-        ),
+    optimizer, scheduler = _build_optim_and_schedule(model, train_cfg, len(train_ds))
+    loss_fn = build_loss(
+        from_cfg_dict({**defense_cfg, "defense": train_cfg.get("defense", "trades")})
     )
     trainer = AdvTrainer(
         vlm=vlm,
@@ -173,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         loss_fn=loss_fn,
         optimizer=optimizer,
         scheduler=scheduler,
-        config=trainer_cfg,
+        config=_build_trainer_config(args, train_cfg, defense_cfg),
         device=args.device,
     )
     trainer.fit(train_ds)

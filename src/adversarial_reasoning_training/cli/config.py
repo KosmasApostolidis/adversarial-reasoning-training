@@ -33,31 +33,33 @@ _MAX_EXTENDS_DEPTH = 8
 
 
 def _load_yaml(path: Path, *, _seen: frozenset[Path]) -> dict[str, Any]:
-    p = path.resolve()
-    if p in _seen:
+    resolved_path = path.resolve()
+    if resolved_path in _seen:
         raise ValueError(
-            f"_extends cycle detected at {p}; visited chain: "
+            f"_extends cycle detected at {resolved_path}; visited chain: "
             f"{[str(s) for s in _seen]}"
         )
     if len(_seen) >= _MAX_EXTENDS_DEPTH:
         raise ValueError(
-            f"_extends chain exceeds depth {_MAX_EXTENDS_DEPTH} at {p}"
+            f"_extends chain exceeds depth {_MAX_EXTENDS_DEPTH} at {resolved_path}"
         )
-    with p.open("r", encoding="utf-8") as f:
+    with resolved_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if not isinstance(data, dict):
         raise ValueError(
-            f"{p}: expected top-level YAML mapping, got {type(data).__name__}"
+            f"{resolved_path}: expected top-level YAML mapping, "
+            f"got {type(data).__name__}"
         )
     parent_ref = data.pop("_extends", None)
     if parent_ref is None:
         return data
     if not isinstance(parent_ref, str):
         raise ValueError(
-            f"{p}: _extends must be a string path, got {type(parent_ref).__name__}"
+            f"{resolved_path}: _extends must be a string path, "
+            f"got {type(parent_ref).__name__}"
         )
-    parent_path = (p.parent / parent_ref).resolve()
-    parent = _load_yaml(parent_path, _seen=_seen | {p})
+    parent_path = (resolved_path.parent / parent_ref).resolve()
+    parent = _load_yaml(parent_path, _seen=_seen | {resolved_path})
     return _deep_merge(parent, data)
 
 

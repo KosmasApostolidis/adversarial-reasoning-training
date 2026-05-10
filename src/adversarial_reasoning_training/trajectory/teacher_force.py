@@ -31,6 +31,7 @@ import torch
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
 from PIL import Image
 
+from ..utils.constants import VLMFamily
 from .segments import DEFAULT_MASK_WEIGHTS, MaskWeights
 
 
@@ -141,9 +142,9 @@ def assemble(
     # ``NotImplementedError`` which was indistinguishable from "support
     # not yet wired up". When adding a new family, register it here.
     dispatch = {
-        "qwen_vl": assemble_qwen,
-        "llava_next": assemble_llava_next,
-        "internvl2": assemble_internvl,
+        VLMFamily.QWEN_VL.value: assemble_qwen,
+        VLMFamily.LLAVA_NEXT.value: assemble_llava_next,
+        VLMFamily.INTERNVL2.value: assemble_internvl,
     }
     fn = dispatch.get(family)
     if fn is None:

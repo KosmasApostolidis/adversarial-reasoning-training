@@ -30,6 +30,12 @@ from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.freeze import _LM_PATTERNS, _PROJECTOR_PATTERNS, _VIT_PATTERNS
 from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
+from ._common import (
+    build_train_dataset,
+    get_collator,
+    load_gate_yaml,
+    write_gate_result,
+)
 
 
 @dataclass
@@ -157,8 +163,7 @@ def run_t0(
         duration_s=time.time() - start,
         notes=notes,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result
 
 
@@ -168,11 +173,7 @@ def _main() -> int:
     """
     import argparse
 
-    import yaml
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
-
-    from ..data.dataset import ProstateXTrainDS
-    from ..gold.oracle import load_metadata_csv
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
@@ -190,14 +191,10 @@ def _main() -> int:
     parser.add_argument("--pgd-steps", type=int, default=3)
     args = parser.parse_args()
 
-    def _load(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
-
-    defense_cfg = _load(args.defenses)
-    data_cfg = _load(args.data)
-    gold_cfg = _load(args.gold)
-    ft_cfg = _load(args.full_ft)
+    defense_cfg = load_gate_yaml(args.defenses, allow_empty=False)
+    data_cfg = load_gate_yaml(args.data, allow_empty=False)
+    gold_cfg = load_gate_yaml(args.gold, allow_empty=False)
+    ft_cfg = load_gate_yaml(args.full_ft, allow_empty=False)
     defense_cfg.setdefault("defense", "trades")
 
     vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
@@ -207,24 +204,8 @@ def _main() -> int:
     from ..trainer.freeze import FreezeConfig, apply_freeze
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
-    proc_arg = vlm if vlm.family == "internvl2" else (
-        getattr(vlm, "processor", None) or vlm.tokenizer
-    )
-    collator = TFCollator(family=vlm.family, processor=proc_arg)
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
-    ds = ProstateXTrainDS(
-        task_id=data_cfg["task_id"],
-        split=data_cfg.get("train_split", "train"),
-        cache_dir=Path(gold_cfg["cache_dir"]),
-        oracle_version=gold_cfg["oracle_version"],
-        metadata_lookup=metadata_lookup,
-        n=1,
-        synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-        ),
-    )
+    collator = get_collator(vlm)
+    ds = build_train_dataset(data_cfg, gold_cfg, n=1)
 
     def _factory() -> Any:
         return ds[0]

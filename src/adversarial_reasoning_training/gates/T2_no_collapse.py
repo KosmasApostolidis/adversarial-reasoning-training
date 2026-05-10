@@ -20,6 +20,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ._common import (
+    build_train_dataset,
+    get_collator,
+    load_gate_yaml,
+    write_gate_result,
+)
+
 
 @dataclass
 class T2Thresholds:
@@ -76,14 +83,14 @@ def run_t2(
 
     for key in thresholds.metrics:
         ceil = ceiling.get(key)
-        cur = float(current.get(key, 0.0))
+        current_value = float(current.get(key, 0.0))
         if ceil is None:
             notes.append(f"metric {key} missing from T1 result")
             continue
-        drop = ceil - cur
+        drop = ceil - current_value
         per_metric[key] = {
             "ceiling": ceil,
-            "current": cur,
+            "current": current_value,
             "drop": drop,
             "tolerance": tol,
             "ok": drop <= tol,
@@ -104,8 +111,7 @@ def run_t2(
         },
         notes=notes,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result
 
 
@@ -127,12 +133,8 @@ def _main() -> int:
     import argparse
 
     import torch
-    import yaml
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
-    from ..data.collator import TFCollator
-    from ..data.dataset import ProstateXTrainDS
-    from ..gold.oracle import load_metadata_csv
     from ..trainer.ckpt import load_checkpoint
     from .T1_clean import make_teacher_forced_evaluator
 
@@ -160,12 +162,8 @@ def _main() -> int:
     )
     args = parser.parse_args()
 
-    def _load(path: Path) -> dict[str, Any]:
-        with path.open("r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-
-    data_cfg = _load(args.data)
-    gold_cfg = _load(args.gold)
+    data_cfg = load_gate_yaml(args.data)
+    gold_cfg = load_gate_yaml(args.gold)
 
     vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
     model = vlm.model
@@ -174,25 +172,13 @@ def _main() -> int:
     if args.ckpt is not None:
         load_checkpoint(args.ckpt, model, optimizer=None, map_location=args.device)
 
-    proc_arg = vlm if vlm.family == "internvl2" else (
-        getattr(vlm, "processor", None) or vlm.tokenizer
-    )
-    collator = TFCollator(family=vlm.family, processor=proc_arg)
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
-
+    collator = get_collator(vlm)
     n_dev = args.max_eval_samples or data_cfg.get("n_dev")
-    dev_ds = ProstateXTrainDS(
-        task_id=data_cfg["task_id"],
+    dev_ds = build_train_dataset(
+        data_cfg,
+        gold_cfg,
         split=data_cfg.get("dev_split", "dev"),
-        cache_dir=Path(gold_cfg["cache_dir"]),
-        oracle_version=gold_cfg["oracle_version"],
-        metadata_lookup=metadata_lookup,
         n=n_dev,
-        synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-        ),
     )
 
     device_t = torch.device(args.device)

@@ -15,13 +15,17 @@ Writes ``runs/<id>/gates/T3.json``.
 
 from __future__ import annotations
 
-import json
+import logging
 import math
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from ._common import write_gate_result
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,6 +71,10 @@ def _wilcoxon_signed_rank(
     try:
         from scipy.stats import wilcoxon  # type: ignore
     except ImportError:
+        logger.warning(
+            "scipy unavailable — Wilcoxon signed-rank skipped, "
+            "returning (nan, 1.0). Install scipy to recover BH-FDR statistics."
+        )
         return float("nan"), 1.0
     diffs = [d - b for b, d in zip(baseline, defended, strict=False)]
     nonzero = [d for d in diffs if d != 0.0]
@@ -75,6 +83,13 @@ def _wilcoxon_signed_rank(
     try:
         stat, p = wilcoxon(nonzero, alternative="two-sided")
     except ValueError:
+        logger.warning(
+            "scipy.stats.wilcoxon rejected the input "
+            "(n_nonzero=%d, n=%d) — returning (nan, 1.0).",
+            len(nonzero),
+            len(diffs),
+            exc_info=True,
+        )
         return float("nan"), 1.0
     return float(stat), float(p)
 
@@ -118,20 +133,27 @@ def run_t3(
     notes: list[str] = []
 
     for key in thresholds.metrics:
-        b = baseline_per_sample.get(key, [])
-        d = defended_per_sample.get(key, [])
-        if not b or not d or len(b) != len(d):
+        baseline_samples = baseline_per_sample.get(key, [])
+        defended_samples = defended_per_sample.get(key, [])
+        if (
+            not baseline_samples
+            or not defended_samples
+            or len(baseline_samples) != len(defended_samples)
+        ):
             notes.append(f"{key}: missing or length-mismatched samples; skipped")
             continue
-        mean_delta = sum(di - bi for bi, di in zip(b, d, strict=False)) / len(b)
-        stat, p = _wilcoxon_signed_rank(b, d)
+        mean_delta = sum(
+            di - bi
+            for bi, di in zip(baseline_samples, defended_samples, strict=False)
+        ) / len(baseline_samples)
+        stat, p = _wilcoxon_signed_rank(baseline_samples, defended_samples)
         per_metric[key] = {
-            "baseline_mean": sum(b) / len(b),
-            "defended_mean": sum(d) / len(d),
+            "baseline_mean": sum(baseline_samples) / len(baseline_samples),
+            "defended_mean": sum(defended_samples) / len(defended_samples),
             "delta_mean": mean_delta,
             "wilcoxon_stat": stat,
             "p_value": p,
-            "n": len(b),
+            "n": len(baseline_samples),
         }
         pvalues.append(p)
         metric_keys.append(key)
@@ -175,6 +197,5 @@ def run_t3(
         notes=notes,
         dropped_metrics=drops,
     )
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(result.to_dict(), f, indent=2)
+    write_gate_result(out_path, result.to_dict())
     return result

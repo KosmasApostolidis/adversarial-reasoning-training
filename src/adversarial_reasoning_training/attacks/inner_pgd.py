@@ -127,11 +127,11 @@ def validate_eps_schedule(schedule: list[dict[str, Any]] | None) -> None:
                 f"eps_schedule[{i}] missing 'eps' key (got keys: "
                 f"{sorted(entry.keys())})."
             )
-        rng = entry["epoch_range"]
-        if not (isinstance(rng, (list, tuple)) and len(rng) == 2):
+        epoch_range = entry["epoch_range"]
+        if not (isinstance(epoch_range, (list, tuple)) and len(epoch_range) == 2):
             raise ValueError(
                 f"eps_schedule[{i}].epoch_range must be a 2-element list, "
-                f"got {rng!r}."
+                f"got {epoch_range!r}."
             )
 
 
@@ -146,11 +146,11 @@ def epsilon_for_epoch(
     trainer startup to surface those bugs before mid-epoch crashes.
     """
     for entry in schedule or []:
-        rng = entry.get("epoch_range")
+        epoch_range = entry.get("epoch_range")
         eps = entry.get("eps")
-        if rng is None or eps is None or len(rng) != 2:
+        if epoch_range is None or eps is None or len(epoch_range) != 2:
             continue
-        lo, hi = rng
+        lo, hi = epoch_range
         if lo <= epoch <= hi:
             return float(eps)
     return default_eps
