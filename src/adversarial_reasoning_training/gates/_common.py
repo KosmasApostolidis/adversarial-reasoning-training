@@ -2,11 +2,13 @@
 
 Each gate's CLI surface is legitimately distinct (different required configs,
 different outputs), so this module deliberately does **not** wrap the entire
-``_main()`` shape in a base class. It targets the two pieces of code that
-were copy-pasted verbatim across all four gates:
+``_main()`` shape in a base class. It targets the pieces that were copy-pasted
+verbatim across the gates:
 
 * the inline YAML loader (3 of 4 gates: T0, T1, T2)
 * the inline ``out_path.open("w") + json.dump(...)`` writer (4 of 4 gates)
+* the family-aware processor + collator wiring (T0, T1, T2, cli/train)
+* the metadata CSV → ``ProstateXTrainDS`` plumbing (T0, T1, T2, cli/train)
 
 By centralising both, the gates fail fast on misshapen configs and write
 their result JSON atomically (tempfile + rename), which prevents a partial
@@ -25,9 +27,20 @@ from typing import Any
 
 import yaml
 
+from ..data.collator import TFCollator
+from ..data.dataset import ProstateXTrainDS
+from ..gold.oracle import load_metadata_csv
+from ..utils.constants import VLMFamily
 from ..utils.paths import ensure_parent
 
-__all__ = ["load_gate_yaml", "write_gate_result"]
+__all__ = [
+    "build_metadata_lookup",
+    "build_train_dataset",
+    "get_collator",
+    "get_processor",
+    "load_gate_yaml",
+    "write_gate_result",
+]
 
 
 def load_gate_yaml(
@@ -101,3 +114,66 @@ def write_gate_result(path: str | Path, payload: Mapping[str, Any]) -> Path:
         Path(tmp).unlink(missing_ok=True)
         raise
     return target
+
+
+def get_processor(vlm: Any) -> Any:
+    """Return the assembler-ready processor object for ``vlm``.
+
+    InternVL2 ships no first-class HF processor — its assembler reaches
+    ``preprocess_image`` / ``tokenizer`` / ``_num_image_token`` on the
+    wrapper itself, so the wrapper is returned as-is. Qwen and LLaVA-NeXT
+    expose an ``AutoProcessor`` (preferred) and fall back to the bare
+    tokenizer when one was not attached.
+    """
+    if vlm.family == VLMFamily.INTERNVL2:
+        return vlm
+    return getattr(vlm, "processor", None) or vlm.tokenizer
+
+
+def get_collator(vlm: Any) -> TFCollator:
+    """Build the family-aware ``TFCollator`` for ``vlm``."""
+    return TFCollator(family=vlm.family, processor=get_processor(vlm))
+
+
+def build_metadata_lookup(data_cfg: Mapping[str, Any]) -> dict[str, Any]:
+    """Materialise the optional metadata CSV referenced by ``data_cfg``.
+
+    Returns an empty dict when the config does not name a CSV path; this
+    matches the prior ``load_metadata_csv(metadata_csv) if metadata_csv else {}``
+    idiom used by every gate and the CLI trainer.
+    """
+    metadata_csv = data_cfg.get("metadata_csv")
+    if not metadata_csv:
+        return {}
+    return load_metadata_csv(metadata_csv)
+
+
+def build_train_dataset(
+    data_cfg: Mapping[str, Any],
+    gold_cfg: Mapping[str, Any],
+    *,
+    split: str | None = None,
+    n: int | None = None,
+    metadata_lookup: Mapping[str, Any] | None = None,
+) -> ProstateXTrainDS:
+    """Construct a ``ProstateXTrainDS`` from the gate config trio.
+
+    The factory mirrors the call shape duplicated across T0, T1, T2 and the
+    training CLI. ``split`` defaults to ``data_cfg["train_split"]`` (or
+    ``"train"``) so callers wanting a dev split must pass it explicitly.
+    """
+    if metadata_lookup is None:
+        metadata_lookup = build_metadata_lookup(data_cfg)
+    resolved_split = split if split is not None else data_cfg.get("train_split", "train")
+    return ProstateXTrainDS(
+        task_id=data_cfg["task_id"],
+        split=resolved_split,
+        cache_dir=Path(gold_cfg["cache_dir"]),
+        oracle_version=gold_cfg["oracle_version"],
+        metadata_lookup=metadata_lookup,
+        n=n,
+        synthetic=bool(data_cfg.get("synthetic", False)),
+        config_path=data_cfg.get(
+            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
+        ),
+    )

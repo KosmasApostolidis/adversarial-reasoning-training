@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from adversarial_reasoning_training.gates._common import (
+    build_metadata_lookup,
+    build_train_dataset,
+    get_collator,
+    get_processor,
     load_gate_yaml,
     write_gate_result,
 )
+from adversarial_reasoning_training.utils.constants import VLMFamily
 
 
 def test_load_gate_yaml_returns_mapping(tmp_path: Path) -> None:
@@ -124,3 +130,153 @@ def test_write_gate_result_resolves_user_expansion(monkeypatch, tmp_path: Path) 
     assert json.loads(expanded.read_text()) == {"ok": True}
     # Cleanup: avoid bleeding into other tests via lingering file in tmp HOME.
     os.unlink(expanded)
+
+
+# --- get_processor / get_collator -----------------------------------------
+
+
+def test_get_processor_internvl2_returns_wrapper() -> None:
+    """InternVL2 has no first-class HF processor; the wrapper itself is passed."""
+    vlm = SimpleNamespace(
+        family=VLMFamily.INTERNVL2,
+        processor=object(),
+        tokenizer=object(),
+    )
+    assert get_processor(vlm) is vlm
+
+
+def test_get_processor_qwen_returns_processor_attr() -> None:
+    proc = object()
+    vlm = SimpleNamespace(family=VLMFamily.QWEN_VL, processor=proc, tokenizer=object())
+    assert get_processor(vlm) is proc
+
+
+def test_get_processor_falls_back_to_tokenizer_when_processor_missing() -> None:
+    tok = object()
+    vlm = SimpleNamespace(family=VLMFamily.LLAVA_NEXT, processor=None, tokenizer=tok)
+    assert get_processor(vlm) is tok
+
+
+def test_get_processor_uses_string_family_for_compat() -> None:
+    """Pre-enum gate configs may carry a raw string family — still routed."""
+    vlm = SimpleNamespace(family="internvl2", processor=object(), tokenizer=object())
+    assert get_processor(vlm) is vlm
+
+
+def test_get_collator_constructs_tfcollator(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _StubCollator:
+        def __init__(self, *, family: str, processor: object) -> None:
+            captured["family"] = family
+            captured["processor"] = processor
+
+    monkeypatch.setattr(
+        "adversarial_reasoning_training.gates._common.TFCollator", _StubCollator
+    )
+    proc = object()
+    vlm = SimpleNamespace(family=VLMFamily.QWEN_VL, processor=proc, tokenizer=object())
+    coll = get_collator(vlm)
+    assert isinstance(coll, _StubCollator)
+    assert captured["family"] == VLMFamily.QWEN_VL
+    assert captured["processor"] is proc
+
+
+# --- build_metadata_lookup ------------------------------------------------
+
+
+def test_build_metadata_lookup_empty_when_csv_missing() -> None:
+    assert build_metadata_lookup({}) == {}
+    assert build_metadata_lookup({"metadata_csv": ""}) == {}
+    assert build_metadata_lookup({"metadata_csv": None}) == {}
+
+
+def test_build_metadata_lookup_calls_load_metadata_csv(monkeypatch) -> None:
+    seen: list[str] = []
+
+    def _fake_load(csv_path: str) -> dict[str, str]:
+        seen.append(csv_path)
+        return {"id-1": "row-1"}
+
+    monkeypatch.setattr(
+        "adversarial_reasoning_training.gates._common.load_metadata_csv", _fake_load
+    )
+    out = build_metadata_lookup({"metadata_csv": "/tmp/m.csv"})
+    assert out == {"id-1": "row-1"}
+    assert seen == ["/tmp/m.csv"]
+
+
+# --- build_train_dataset --------------------------------------------------
+
+
+def test_build_train_dataset_passes_through_kwargs(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _StubDS:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "adversarial_reasoning_training.gates._common.ProstateXTrainDS", _StubDS
+    )
+    monkeypatch.setattr(
+        "adversarial_reasoning_training.gates._common.load_metadata_csv",
+        lambda _: {"k": "v"},
+    )
+    data_cfg = {
+        "task_id": "tA",
+        "metadata_csv": "/tmp/x.csv",
+        "synthetic": True,
+        "config_path": "/cfg/tasks.yaml",
+    }
+    gold_cfg = {"cache_dir": "/cache", "oracle_version": "v3"}
+
+    ds = build_train_dataset(data_cfg, gold_cfg, split="dev", n=4)
+    assert isinstance(ds, _StubDS)
+    assert captured["task_id"] == "tA"
+    assert captured["split"] == "dev"
+    assert str(captured["cache_dir"]) == "/cache"
+    assert captured["oracle_version"] == "v3"
+    assert captured["metadata_lookup"] == {"k": "v"}
+    assert captured["n"] == 4
+    assert captured["synthetic"] is True
+    assert captured["config_path"] == "/cfg/tasks.yaml"
+
+
+def test_build_train_dataset_default_split_uses_train_split(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _StubDS:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "adversarial_reasoning_training.gates._common.ProstateXTrainDS", _StubDS
+    )
+    build_train_dataset(
+        {"task_id": "t", "train_split": "train_v2"},
+        {"cache_dir": "/c", "oracle_version": "v1"},
+    )
+    assert captured["split"] == "train_v2"
+    # No metadata_csv → empty lookup, not a KeyError.
+    assert captured["metadata_lookup"] == {}
+
+
+def test_build_train_dataset_accepts_explicit_metadata_lookup(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _StubDS:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "adversarial_reasoning_training.gates._common.ProstateXTrainDS", _StubDS
+    )
+    explicit = {"forced": "yes"}
+    build_train_dataset(
+        {"task_id": "t"},
+        {"cache_dir": "/c", "oracle_version": "v1"},
+        metadata_lookup=explicit,
+    )
+    # Explicit lookup takes precedence; load_metadata_csv must not run.
+    assert captured["metadata_lookup"] is explicit
