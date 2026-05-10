@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 import torch
-from adversarial_reasoning.agents.base import ToolCall, Trajectory
+from adversarial_reasoning.agents.base import Trajectory
 from PIL import Image
 
 from ..mask import build_masks, labels_from_input_ids

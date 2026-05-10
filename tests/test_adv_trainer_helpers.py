@@ -15,16 +15,14 @@ delta.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import torch
-from torch.utils.data import Dataset
 
 from adversarial_reasoning_training.trainer.adv_trainer import AdvTrainer, TrainerConfig
-from adversarial_reasoning_training.trajectory.teacher_force import TeacherForcedBatch
 
 
 @dataclass
