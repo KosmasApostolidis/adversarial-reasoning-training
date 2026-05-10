@@ -20,9 +20,7 @@ from typing import Any
 
 import torch
 
-from ..data.collator import TFCollator
-from ..data.dataset import ProstateXTrainDS
-from ..gold.oracle import load_metadata_csv
+from ..gates._common import build_train_dataset, get_collator
 from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.adv_trainer import AdvTrainer, TrainerConfig
 from ..trainer.freeze import FreezeConfig, apply_freeze
@@ -32,7 +30,7 @@ from ..trainer.optim import (
     build_optimizer,
     build_scheduler,
 )
-from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255, VLMFamily
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from .config import load_yaml
 from .runtime import setup_seed
 from .schema import (
@@ -103,30 +101,12 @@ def main(argv: list[str] | None = None) -> int:
     # InternVL2 ships no formal HF processor — pass the wrapper itself so the
     # teacher-force assembler can reach .preprocess_image / .tokenizer /
     # ._num_image_token. Qwen + LLaVA-NeXT use their AutoProcessor as before.
-    if vlm.family == VLMFamily.INTERNVL2:
-        proc_arg: Any = vlm
-    else:
-        proc_arg = getattr(vlm, "processor", None) or vlm.tokenizer
-    collator = TFCollator(
-        family=vlm.family,
-        processor=proc_arg,
-    )
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = (
-        load_metadata_csv(metadata_csv) if metadata_csv else {}
-    )
-    n_train = data_cfg.get("n_train")
-    train_ds = ProstateXTrainDS(
-        task_id=data_cfg["task_id"],
+    collator = get_collator(vlm)
+    train_ds = build_train_dataset(
+        data_cfg,
+        gold_cfg,
         split=data_cfg.get("train_split", "train"),
-        cache_dir=Path(gold_cfg["cache_dir"]),
-        oracle_version=gold_cfg["oracle_version"],
-        metadata_lookup=metadata_lookup,
-        n=n_train,
-        synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-        ),
+        n=data_cfg.get("n_train"),
     )
 
     optim_cfg = OptimConfig(

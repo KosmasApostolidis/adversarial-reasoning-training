@@ -26,8 +26,13 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..data.collator import TFCollator
 from ..losses.task_ce import task_ce
-from ..utils.constants import VLMFamily
-from ._common import load_gate_yaml, write_gate_result
+from ._common import (
+    build_metadata_lookup,
+    build_train_dataset,
+    get_collator,
+    load_gate_yaml,
+    write_gate_result,
+)
 
 
 @dataclass
@@ -218,8 +223,6 @@ def _main() -> int:
 
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
-    from ..data.dataset import ProstateXTrainDS
-    from ..gold.oracle import load_metadata_csv
     from ..trainer.freeze import FreezeConfig, apply_freeze
     from ..trainer.optim import (
         OptimConfig,
@@ -257,29 +260,22 @@ def _main() -> int:
 
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
-    proc_arg = vlm if vlm.family == VLMFamily.INTERNVL2 else (
-        getattr(vlm, "processor", None) or vlm.tokenizer
+    collator = get_collator(vlm)
+    metadata_lookup = build_metadata_lookup(data_cfg)
+    train_ds = build_train_dataset(
+        data_cfg,
+        gold_cfg,
+        split=data_cfg.get("train_split", "train"),
+        n=data_cfg.get("n_train"),
+        metadata_lookup=metadata_lookup,
     )
-    collator = TFCollator(family=vlm.family, processor=proc_arg)
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
-
-    def _ds(split_name: str, n: int | None) -> ProstateXTrainDS:
-        return ProstateXTrainDS(
-            task_id=data_cfg["task_id"],
-            split=split_name,
-            cache_dir=Path(gold_cfg["cache_dir"]),
-            oracle_version=gold_cfg["oracle_version"],
-            metadata_lookup=metadata_lookup,
-            n=n,
-            synthetic=bool(data_cfg.get("synthetic", False)),
-            config_path=data_cfg.get(
-                "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-            ),
-        )
-
-    train_ds = _ds(data_cfg.get("train_split", "train"), data_cfg.get("n_train"))
-    dev_ds = _ds(data_cfg.get("dev_split", "dev"), data_cfg.get("n_dev"))
+    dev_ds = build_train_dataset(
+        data_cfg,
+        gold_cfg,
+        split=data_cfg.get("dev_split", "dev"),
+        n=data_cfg.get("n_dev"),
+        metadata_lookup=metadata_lookup,
+    )
 
     lr = train_cfg.get("lr", {})
     betas = train_cfg.get("betas", [0.9, 0.999])

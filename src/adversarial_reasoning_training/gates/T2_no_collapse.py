@@ -20,8 +20,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from ..utils.constants import VLMFamily
-from ._common import load_gate_yaml, write_gate_result
+from ._common import (
+    build_train_dataset,
+    get_collator,
+    load_gate_yaml,
+    write_gate_result,
+)
 
 
 @dataclass
@@ -131,9 +135,6 @@ def _main() -> int:
     import torch
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
-    from ..data.collator import TFCollator
-    from ..data.dataset import ProstateXTrainDS
-    from ..gold.oracle import load_metadata_csv
     from ..trainer.ckpt import load_checkpoint
     from .T1_clean import make_teacher_forced_evaluator
 
@@ -171,25 +172,13 @@ def _main() -> int:
     if args.ckpt is not None:
         load_checkpoint(args.ckpt, model, optimizer=None, map_location=args.device)
 
-    proc_arg = vlm if vlm.family == VLMFamily.INTERNVL2 else (
-        getattr(vlm, "processor", None) or vlm.tokenizer
-    )
-    collator = TFCollator(family=vlm.family, processor=proc_arg)
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
-
+    collator = get_collator(vlm)
     n_dev = args.max_eval_samples or data_cfg.get("n_dev")
-    dev_ds = ProstateXTrainDS(
-        task_id=data_cfg["task_id"],
+    dev_ds = build_train_dataset(
+        data_cfg,
+        gold_cfg,
         split=data_cfg.get("dev_split", "dev"),
-        cache_dir=Path(gold_cfg["cache_dir"]),
-        oracle_version=gold_cfg["oracle_version"],
-        metadata_lookup=metadata_lookup,
         n=n_dev,
-        synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-        ),
     )
 
     device_t = torch.device(args.device)

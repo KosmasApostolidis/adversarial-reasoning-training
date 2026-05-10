@@ -28,9 +28,14 @@ from ..attacks.inner_pgd import InnerPgdConfig, run_inner_pgd
 from ..data.collator import TFCollator
 from ..losses.selector import build_loss, from_cfg_dict
 from ..trainer.freeze import _LM_PATTERNS, _PROJECTOR_PATTERNS, _VIT_PATTERNS
-from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255, VLMFamily
+from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
-from ._common import load_gate_yaml, write_gate_result
+from ._common import (
+    build_train_dataset,
+    get_collator,
+    load_gate_yaml,
+    write_gate_result,
+)
 
 
 @dataclass
@@ -170,9 +175,6 @@ def _main() -> int:
 
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
-    from ..data.dataset import ProstateXTrainDS
-    from ..gold.oracle import load_metadata_csv
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--defenses", type=Path, default=Path("configs/defenses.yaml"))
@@ -202,24 +204,8 @@ def _main() -> int:
     from ..trainer.freeze import FreezeConfig, apply_freeze
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
 
-    proc_arg = vlm if vlm.family == VLMFamily.INTERNVL2 else (
-        getattr(vlm, "processor", None) or vlm.tokenizer
-    )
-    collator = TFCollator(family=vlm.family, processor=proc_arg)
-    metadata_csv = data_cfg.get("metadata_csv")
-    metadata_lookup = load_metadata_csv(metadata_csv) if metadata_csv else {}
-    ds = ProstateXTrainDS(
-        task_id=data_cfg["task_id"],
-        split=data_cfg.get("train_split", "train"),
-        cache_dir=Path(gold_cfg["cache_dir"]),
-        oracle_version=gold_cfg["oracle_version"],
-        metadata_lookup=metadata_lookup,
-        n=1,
-        synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
-        ),
-    )
+    collator = get_collator(vlm)
+    ds = build_train_dataset(data_cfg, gold_cfg, n=1)
 
     def _factory() -> Any:
         return ds[0]
