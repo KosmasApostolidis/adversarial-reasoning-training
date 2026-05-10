@@ -83,14 +83,14 @@ def run_t2(
 
     for key in thresholds.metrics:
         ceil = ceiling.get(key)
-        cur = float(current.get(key, 0.0))
+        current_value = float(current.get(key, 0.0))
         if ceil is None:
             notes.append(f"metric {key} missing from T1 result")
             continue
-        drop = ceil - cur
+        drop = ceil - current_value
         per_metric[key] = {
             "ceiling": ceil,
-            "current": cur,
+            "current": current_value,
             "drop": drop,
             "tolerance": tol,
             "ok": drop <= tol,

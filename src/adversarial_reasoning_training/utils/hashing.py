@@ -36,18 +36,18 @@ def sha256_image(image: Image.Image) -> str:
     implementation; existing gold caches will rebuild on first miss.
     """
     rgb = image.convert("RGB")
-    h = hashlib.sha256()
-    h.update(f"{rgb.size[0]}x{rgb.size[1]}|".encode("ascii"))
-    h.update(rgb.tobytes())
-    return h.hexdigest()
+    hasher = hashlib.sha256()
+    hasher.update(f"{rgb.size[0]}x{rgb.size[1]}|".encode("ascii"))
+    hasher.update(rgb.tobytes())
+    return hasher.hexdigest()
 
 
 def sha256_file(path: str | Path, chunk_size: int = 1 << 20) -> str:
-    h = hashlib.sha256()
+    hasher = hashlib.sha256()
     with Path(path).open("rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
-            h.update(chunk)
-    return h.hexdigest()
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def gold_cache_key(

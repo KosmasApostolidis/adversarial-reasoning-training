@@ -133,20 +133,27 @@ def run_t3(
     notes: list[str] = []
 
     for key in thresholds.metrics:
-        b = baseline_per_sample.get(key, [])
-        d = defended_per_sample.get(key, [])
-        if not b or not d or len(b) != len(d):
+        baseline_samples = baseline_per_sample.get(key, [])
+        defended_samples = defended_per_sample.get(key, [])
+        if (
+            not baseline_samples
+            or not defended_samples
+            or len(baseline_samples) != len(defended_samples)
+        ):
             notes.append(f"{key}: missing or length-mismatched samples; skipped")
             continue
-        mean_delta = sum(di - bi for bi, di in zip(b, d, strict=False)) / len(b)
-        stat, p = _wilcoxon_signed_rank(b, d)
+        mean_delta = sum(
+            di - bi
+            for bi, di in zip(baseline_samples, defended_samples, strict=False)
+        ) / len(baseline_samples)
+        stat, p = _wilcoxon_signed_rank(baseline_samples, defended_samples)
         per_metric[key] = {
-            "baseline_mean": sum(b) / len(b),
-            "defended_mean": sum(d) / len(d),
+            "baseline_mean": sum(baseline_samples) / len(baseline_samples),
+            "defended_mean": sum(defended_samples) / len(defended_samples),
             "delta_mean": mean_delta,
             "wilcoxon_stat": stat,
             "p_value": p,
-            "n": len(b),
+            "n": len(baseline_samples),
         }
         pvalues.append(p)
         metric_keys.append(key)

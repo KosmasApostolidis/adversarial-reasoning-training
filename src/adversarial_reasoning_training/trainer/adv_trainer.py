@@ -126,7 +126,11 @@ class AdvTrainer:
             "fp32": torch.float32,
         }[self.config.amp_dtype]
 
-    def _log(self, record: dict[str, Any]) -> None:
+    def _append_log_record(self, record: dict[str, Any]) -> None:
+        """Append one JSON-line record to ``self.log_path``.
+
+        Renamed from ``_log`` so the file I/O side-effect is explicit.
+        """
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -180,7 +184,7 @@ class AdvTrainer:
         attack_loss_value = float(attack_result.loss_final)
         attack_diverged = math.isnan(attack_loss_value) or math.isinf(attack_loss_value)
         if attack_diverged:
-            self._log({
+            self._append_log_record({
                 "event": "attack_diverged",
                 "epsilon": epsilon,
                 "attack_iterations": int(attack_result.iterations),
@@ -234,7 +238,7 @@ class AdvTrainer:
             total_norm = torch.tensor(0.0)
 
         if not torch.isfinite(total_norm):
-            self._log({
+            self._append_log_record({
                 "event": "skipped_nan_grad",
                 "global_step": self._global_step,
                 "epoch": epoch,
@@ -265,7 +269,7 @@ class AdvTrainer:
 
         if self._global_step % self.config.log_every == 0:
             mem = current_memory_stats()
-            self._log({
+            self._append_log_record({
                 "event": "train_step",
                 "global_step": self._global_step,
                 "epoch": epoch,
@@ -295,7 +299,7 @@ class AdvTrainer:
                 self.evaluator(self._global_step, epoch) if self.evaluator else {}
             )
             metric_value = metrics.get(self.metric_for_best) if metrics else None
-            self._log({
+            self._append_log_record({
                 "event": "eval",
                 "global_step": self._global_step,
                 "epoch": epoch,
@@ -349,7 +353,7 @@ class AdvTrainer:
                 # full grad_accum window before stepping (otherwise the step
                 # would apply on a sub-window with mis-scaled gradient).
                 if not torch.isfinite(loss_out.total):
-                    self._log({
+                    self._append_log_record({
                         "event": "skipped_nan_loss",
                         "global_step": self._global_step,
                         "epoch": epoch,
@@ -405,7 +409,7 @@ class AdvTrainer:
         )
         duration_s = time.time() - start_time
         final_mem = current_memory_stats()
-        self._log({
+        self._append_log_record({
             "event": "fit_done",
             "global_step": global_step,
             "wall_s": duration_s,

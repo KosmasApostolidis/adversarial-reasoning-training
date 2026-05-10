@@ -72,20 +72,20 @@ def load_gate_yaml(
         TypedDict because each gate has its own schema; PR3 pilots a
         TypedDict for the training config specifically.
     """
-    p = Path(path)
-    with p.open("r", encoding="utf-8") as f:
+    yaml_path = Path(path)
+    with yaml_path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     if data is None:
         if allow_empty:
             return {}
-        raise ValueError(f"{p}: YAML document is empty")
+        raise ValueError(f"{yaml_path}: YAML document is empty")
     if not isinstance(data, dict):
         raise ValueError(
-            f"{p}: expected top-level YAML mapping, got {type(data).__name__}"
+            f"{yaml_path}: expected top-level YAML mapping, got {type(data).__name__}"
         )
     missing = [k for k in required_keys if k not in data]
     if missing:
-        raise ValueError(f"{p}: missing required keys: {sorted(missing)}")
+        raise ValueError(f"{yaml_path}: missing required keys: {sorted(missing)}")
     return data
 
 
@@ -99,7 +99,7 @@ def write_gate_result(path: str | Path, payload: Mapping[str, Any]) -> Path:
     diffable.
     """
     target = ensure_parent(path)
-    fd, tmp = tempfile.mkstemp(
+    fd, tmp_path = tempfile.mkstemp(
         prefix=target.name + ".",
         suffix=".tmp",
         dir=str(target.parent),
@@ -109,9 +109,9 @@ def write_gate_result(path: str | Path, payload: Mapping[str, Any]) -> Path:
             json.dump(dict(payload), f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, target)
+        os.replace(tmp_path, target)
     except BaseException:
-        Path(tmp).unlink(missing_ok=True)
+        Path(tmp_path).unlink(missing_ok=True)
         raise
     return target
 
