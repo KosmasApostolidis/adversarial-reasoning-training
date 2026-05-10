@@ -188,3 +188,117 @@ def test_finalize_training_writes_meta_and_fit_done(tmp_path: Path) -> None:
     assert len(fit_done) == 1
     assert fit_done[0]["global_step"] == 42
     assert fit_done[0]["total_outer"] == 84
+
+
+# ---------------------------------------------------------------------------
+# _clip_grads / _handle_inf_grad / _maybe_periodic_*
+# ---------------------------------------------------------------------------
+
+
+def _seed_grads(model: torch.nn.Module, value: float) -> None:
+    for p in model.parameters():
+        p.grad = torch.full_like(p.data, value)
+
+
+@pytest.mark.unit
+def test_clip_grads_returns_zero_when_clip_norm_disabled(tmp_path: Path) -> None:
+    trainer = _make_trainer(tmp_path)
+    trainer.config.grad_clip_norm = 0.0
+    _seed_grads(trainer.model, 2.0)
+    total_norm = trainer._clip_grads()
+    assert torch.isfinite(total_norm)
+    assert float(total_norm) == 0.0
+
+
+@pytest.mark.unit
+def test_clip_grads_returns_finite_total_norm_when_enabled(tmp_path: Path) -> None:
+    trainer = _make_trainer(tmp_path)
+    trainer.config.grad_clip_norm = 1.0
+    _seed_grads(trainer.model, 0.5)
+    total_norm = trainer._clip_grads()
+    assert torch.isfinite(total_norm)
+    assert float(total_norm) > 0.0
+
+
+@pytest.mark.unit
+def test_handle_inf_grad_logs_skip_and_resets_accum(tmp_path: Path) -> None:
+    """Inf-grad branch must (a) emit ``skipped_nan_grad``, (b) zero
+    accumulators, and (c) call ``scaler.update`` so the AMP loss-scale
+    halves on the next event. Pre-refactor this lived inline; the
+    extracted helper preserves the exact bookkeeping order.
+    """
+    trainer = _make_trainer(tmp_path)
+    trainer._accum_loss_acc = 1.5
+    trainer._accum_count = 3
+    trainer._handle_inf_grad(epoch=2, reason="window_full")
+
+    assert trainer._accum_loss_acc == 0.0
+    assert trainer._accum_count == 0
+    log = (tmp_path / "train_log.jsonl").read_text()
+    record = json.loads(log.strip())
+    assert record["event"] == "skipped_nan_grad"
+    assert record["epoch"] == 2
+    assert record["reason"] == "window_full"
+    assert record["accum_count"] == 3
+
+
+@pytest.mark.unit
+def test_maybe_save_periodic_skipped_when_disabled(tmp_path: Path) -> None:
+    """save_every=0 ⇒ no checkpoint write. Calling the helper directly
+    must not invoke ckpt.save."""
+    trainer = _make_trainer(tmp_path)
+    trainer.config.save_every = 0
+    trainer._global_step = 10
+    calls: list[dict[str, Any]] = []
+    trainer.ckpt.save = lambda **kw: calls.append(kw)  # type: ignore[assignment]
+    trainer._maybe_save_periodic(epoch=1)
+    assert calls == []
+
+
+@pytest.mark.unit
+def test_maybe_save_periodic_fires_when_step_aligns(tmp_path: Path) -> None:
+    trainer = _make_trainer(tmp_path)
+    trainer.config.save_every = 5
+    trainer._global_step = 5
+    calls: list[dict[str, Any]] = []
+    trainer.ckpt.save = lambda **kw: calls.append(kw)  # type: ignore[assignment]
+    trainer._maybe_save_periodic(epoch=1)
+    assert len(calls) == 1
+    assert calls[0]["step"] == 5
+    assert calls[0]["extra"] == {"reason": "save_every"}
+
+
+@pytest.mark.unit
+def test_maybe_eval_periodic_skipped_when_disabled(tmp_path: Path) -> None:
+    trainer = _make_trainer(tmp_path)
+    trainer.config.eval_every = 0
+    trainer._global_step = 10
+    trainer.evaluator = lambda *_a: {  # pragma: no cover
+        "tool_name_acc": 1.0
+    }
+    calls: list[dict[str, Any]] = []
+    trainer.ckpt.save = lambda **kw: calls.append(kw)  # type: ignore[assignment]
+    trainer._maybe_eval_periodic(epoch=1)
+    assert calls == []
+
+
+@pytest.mark.unit
+def test_maybe_eval_periodic_runs_evaluator_and_saves(tmp_path: Path) -> None:
+    trainer = _make_trainer(tmp_path)
+    trainer.config.eval_every = 4
+    trainer._global_step = 4
+    trainer.evaluator = lambda step, epoch: {"tool_name_acc": 0.7}
+    save_calls: list[dict[str, Any]] = []
+    trainer.ckpt.save = lambda **kw: save_calls.append(kw)  # type: ignore[assignment]
+
+    trainer._maybe_eval_periodic(epoch=1)
+    assert len(save_calls) == 1
+    assert save_calls[0]["metric_value"] == pytest.approx(0.7)
+
+    log = (tmp_path / "train_log.jsonl").read_text()
+    eval_records = [
+        json.loads(line) for line in log.splitlines()
+        if line.strip() and json.loads(line).get("event") == "eval"
+    ]
+    assert len(eval_records) == 1
+    assert eval_records[0]["metrics"] == {"tool_name_acc": 0.7}

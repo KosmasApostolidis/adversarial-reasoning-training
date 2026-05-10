@@ -208,6 +208,107 @@ class AdvTrainer:
 
     # --- optimizer step --------------------------------------------------
 
+    def _clip_grads(self) -> torch.Tensor:
+        """Clip trainable params per ``config.grad_clip_norm``.
+
+        Returns the pre-clip total norm (or 0 when clipping is disabled).
+        Caller must have unscaled the optimizer's grads first under fp16
+        AMP — otherwise the clip would operate on scaled magnitudes.
+        """
+        if self.config.grad_clip_norm and self.config.grad_clip_norm > 0:
+            return torch.nn.utils.clip_grad_norm_(
+                [p for p in self.model.parameters() if p.requires_grad],
+                max_norm=self.config.grad_clip_norm,
+            )
+        return torch.tensor(0.0)
+
+    def _handle_inf_grad(self, epoch: int, reason: str) -> None:
+        """Log the inf-grad skip and reset accumulators.
+
+        ``scaler.update`` must still run on this branch so the AMP
+        loss-scale halves on the inf event; otherwise the scaler stays
+        at the pre-skip scale and every subsequent micro-batch
+        overflows the same way.
+        """
+        self._append_log_record({
+            "event": "skipped_nan_grad",
+            "global_step": self._global_step,
+            "epoch": epoch,
+            "grad_norm": float("nan"),
+            "accum_count": self._accum_count,
+            "reason": reason,
+        })
+        self.optimizer.zero_grad(set_to_none=True)
+        self.scaler.update()
+        self._accum_loss_acc = 0.0
+        self._accum_count = 0
+
+    def _log_train_step(
+        self,
+        *,
+        epoch: int,
+        avg_loss: float,
+        steps_in_window: int,
+        total_norm: torch.Tensor,
+        reason: str,
+        start_time: float,
+        loss_out: LossCallResult,
+        diag: dict[str, float],
+    ) -> None:
+        if self._global_step % self.config.log_every != 0:
+            return
+        mem = current_memory_stats()
+        self._append_log_record({
+            "event": "train_step",
+            "global_step": self._global_step,
+            "epoch": epoch,
+            "avg_loss": avg_loss,
+            "accum_count": steps_in_window,
+            "wall_s": time.time() - start_time,
+            "grad_norm": float(total_norm),
+            "step_reason": reason,
+            **loss_out.components,
+            **diag,
+            **mem.as_dict(),
+        })
+
+    def _maybe_save_periodic(self, epoch: int) -> None:
+        if self.config.save_every <= 0:
+            return
+        if self._global_step % self.config.save_every != 0:
+            return
+        self.ckpt.save(
+            model=self.model,
+            optimizer=self.optimizer,
+            step=self._global_step,
+            epoch=epoch,
+            metric_value=None,
+            extra={"reason": "save_every"},
+            include_optimizer=False,
+        )
+
+    def _maybe_eval_periodic(self, epoch: int) -> None:
+        if self.config.eval_every <= 0:
+            return
+        if self._global_step % self.config.eval_every != 0:
+            return
+        metrics = self.evaluator(self._global_step, epoch) if self.evaluator else {}
+        metric_value = metrics.get(self.metric_for_best) if metrics else None
+        self._append_log_record({
+            "event": "eval",
+            "global_step": self._global_step,
+            "epoch": epoch,
+            "metrics": metrics,
+        })
+        self.ckpt.save(
+            model=self.model,
+            optimizer=self.optimizer,
+            step=self._global_step,
+            epoch=epoch,
+            metric_value=metric_value,
+            extra={"metrics": metrics},
+        )
+
     def _apply_optimizer_step(
         self,
         *,
@@ -229,31 +330,9 @@ class AdvTrainer:
         # scaled magnitudes, silently miscalibrating ``grad_clip_norm``
         # by orders of magnitude under fp16.
         self.scaler.unscale_(self.optimizer)
-        if self.config.grad_clip_norm and self.config.grad_clip_norm > 0:
-            total_norm = torch.nn.utils.clip_grad_norm_(
-                [p for p in self.model.parameters() if p.requires_grad],
-                max_norm=self.config.grad_clip_norm,
-            )
-        else:
-            total_norm = torch.tensor(0.0)
-
+        total_norm = self._clip_grads()
         if not torch.isfinite(total_norm):
-            self._append_log_record({
-                "event": "skipped_nan_grad",
-                "global_step": self._global_step,
-                "epoch": epoch,
-                "grad_norm": float("nan"),
-                "accum_count": self._accum_count,
-                "reason": reason,
-            })
-            self.optimizer.zero_grad(set_to_none=True)
-            # Even though we skip ``scaler.step``, ``update`` must run so
-            # the loss-scale halves on this inf-grad event; otherwise the
-            # scaler stays at the pre-skip scale and every subsequent
-            # micro-batch overflows the same way.
-            self.scaler.update()
-            self._accum_loss_acc = 0.0
-            self._accum_count = 0
+            self._handle_inf_grad(epoch, reason)
             return
 
         self.scaler.step(self.optimizer)
@@ -267,52 +346,18 @@ class AdvTrainer:
         self._accum_loss_acc = 0.0
         self._accum_count = 0
 
-        if self._global_step % self.config.log_every == 0:
-            mem = current_memory_stats()
-            self._append_log_record({
-                "event": "train_step",
-                "global_step": self._global_step,
-                "epoch": epoch,
-                "avg_loss": avg_loss,
-                "accum_count": steps_in_window,
-                "wall_s": time.time() - start_time,
-                "grad_norm": float(total_norm),
-                "step_reason": reason,
-                **loss_out.components,
-                **diag,
-                **mem.as_dict(),
-            })
-
-        if self.config.save_every > 0 and self._global_step % self.config.save_every == 0:
-            self.ckpt.save(
-                model=self.model,
-                optimizer=self.optimizer,
-                step=self._global_step,
-                epoch=epoch,
-                metric_value=None,
-                extra={"reason": "save_every"},
-                include_optimizer=False,
-            )
-
-        if self.config.eval_every > 0 and self._global_step % self.config.eval_every == 0:
-            metrics = (
-                self.evaluator(self._global_step, epoch) if self.evaluator else {}
-            )
-            metric_value = metrics.get(self.metric_for_best) if metrics else None
-            self._append_log_record({
-                "event": "eval",
-                "global_step": self._global_step,
-                "epoch": epoch,
-                "metrics": metrics,
-            })
-            self.ckpt.save(
-                model=self.model,
-                optimizer=self.optimizer,
-                step=self._global_step,
-                epoch=epoch,
-                metric_value=metric_value,
-                extra={"metrics": metrics},
-            )
+        self._log_train_step(
+            epoch=epoch,
+            avg_loss=avg_loss,
+            steps_in_window=steps_in_window,
+            total_norm=total_norm,
+            reason=reason,
+            start_time=start_time,
+            loss_out=loss_out,
+            diag=diag,
+        )
+        self._maybe_save_periodic(epoch)
+        self._maybe_eval_periodic(epoch)
 
     # --- main loop --------------------------------------------------------
 
