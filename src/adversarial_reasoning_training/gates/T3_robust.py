@@ -15,6 +15,7 @@ Writes ``runs/<id>/gates/T3.json``.
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from collections.abc import Sequence
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from ._common import write_gate_result
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,6 +71,10 @@ def _wilcoxon_signed_rank(
     try:
         from scipy.stats import wilcoxon  # type: ignore
     except ImportError:
+        logger.warning(
+            "scipy unavailable — Wilcoxon signed-rank skipped, "
+            "returning (nan, 1.0). Install scipy to recover BH-FDR statistics."
+        )
         return float("nan"), 1.0
     diffs = [d - b for b, d in zip(baseline, defended, strict=False)]
     nonzero = [d for d in diffs if d != 0.0]
@@ -76,6 +83,13 @@ def _wilcoxon_signed_rank(
     try:
         stat, p = wilcoxon(nonzero, alternative="two-sided")
     except ValueError:
+        logger.warning(
+            "scipy.stats.wilcoxon rejected the input "
+            "(n_nonzero=%d, n=%d) — returning (nan, 1.0).",
+            len(nonzero),
+            len(diffs),
+            exc_info=True,
+        )
         return float("nan"), 1.0
     return float(stat), float(p)
 

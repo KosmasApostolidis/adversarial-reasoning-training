@@ -14,6 +14,7 @@ The orchestrator + shared helpers (``TeacherForcedBatch``,
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import torch
@@ -23,6 +24,8 @@ from PIL import Image
 from .mask import build_masks, labels_from_input_ids
 from .segments import DEFAULT_MASK_WEIGHTS, MaskWeights, Segment, SegmentKind
 from .teacher_force import TeacherForcedBatch, _format_observation, _split_thoughts
+
+logger = logging.getLogger(__name__)
 
 # --- Qwen2.5-VL chat template literals --------------------------------------
 
@@ -296,10 +299,16 @@ def _process_image_llava(
         count = sum(1 for t in ids if t == image_token_id)
         if count >= 1:
             num_image_tokens = count
-    except Exception:
+    except (KeyError, IndexError, RuntimeError, ValueError, AttributeError, TypeError):
         # Older transformers versions don't pre-expand the image placeholder; the
         # model handles expansion at forward time, so a single image token is
         # sufficient and keeps input_ids length aligned with output logits.
+        # Log at DEBUG so the fallback is auditable without spamming production runs.
+        logger.debug(
+            "LLaVA-NeXT processor did not pre-expand image placeholder; "
+            "falling back to num_image_tokens=1.",
+            exc_info=True,
+        )
         num_image_tokens = 1
 
     return forward_kwargs, int(image_token_id), num_image_tokens
