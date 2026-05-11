@@ -1,4 +1,4 @@
-"""CheckpointRegistry rotation + include_optimizer flag.
+"""CheckpointRegistry rotation + weights-only save.
 
 Two invariants this test pins down:
 
@@ -6,8 +6,8 @@ Two invariants this test pins down:
     most recent), even when both saves happen at the same global_step
     with different timestamps. This is what kept us from accumulating
     multiple 47 GB ckpts during the smoke run.
-  - ``include_optimizer=False`` writes a weights-only payload — used by
-    the ``save_every`` periodic cadence so disk doesn't explode on long
+  - ``save_weights_only`` writes a weights-only payload — used by the
+    ``save_every`` periodic cadence so disk doesn't explode on long
     training runs.
 """
 
@@ -37,25 +37,23 @@ def test_rotation_keeps_only_latest_step_ckpt(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
-def test_include_optimizer_false_omits_optim_state(tmp_path: Path) -> None:
+def test_save_weights_only_omits_optim_state(tmp_path: Path) -> None:
     reg = CheckpointRegistry(tmp_path)
     model = torch.nn.Linear(4, 4)
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
 
-    path = reg.save(
-        model=model, optimizer=optimizer, step=1, epoch=1,
-        metric_value=None, include_optimizer=False,
+    path = reg.save_weights_only(
+        model=model, step=1, epoch=1, metric_value=None,
     )
     payload = torch.load(path, map_location="cpu", weights_only=False)
     assert "model_state_dict" in payload
     assert "optim_state_dict" not in payload, (
-        "include_optimizer=False must omit optimizer state to keep periodic "
+        "save_weights_only must omit optimizer state to keep periodic "
         "saves disk-cheap on long training runs"
     )
 
 
 @pytest.mark.unit
-def test_include_optimizer_default_true(tmp_path: Path) -> None:
+def test_save_includes_optim_state(tmp_path: Path) -> None:
     reg = CheckpointRegistry(tmp_path)
     model = torch.nn.Linear(4, 4)
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)

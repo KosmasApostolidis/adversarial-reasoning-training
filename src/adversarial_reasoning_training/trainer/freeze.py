@@ -17,6 +17,13 @@ _VIT_PATTERNS = ("visual", "vision_model", "vision_tower", "image_encoder", "pat
 _PROJECTOR_PATTERNS = ("mm_projector", "multi_modal_projector", "visual_projector", "merger")
 _LM_PATTERNS = ("language_model", "model.layers", "lm_head", "model.embed_tokens")
 
+# Strategy → patterns to freeze. Missing key (incl. "none") leaves all params trainable.
+_FREEZE_PATTERNS_BY_STRATEGY: dict[str, tuple[str, ...]] = {
+    "vit_only": _VIT_PATTERNS,
+    "projector_only": _PROJECTOR_PATTERNS,
+    "lm_only": _LM_PATTERNS,
+}
+
 
 def _matches(name: str, patterns: tuple[str, ...]) -> bool:
     return any(p in name for p in patterns)
@@ -31,17 +38,13 @@ def apply_freeze(model: torch.nn.Module, config: FreezeConfig) -> dict[str, int]
         - ``projector_only``   : freeze only the multimodal projector.
         - ``lm_only``          : freeze only the language model stack.
     """
+    freeze_patterns = _FREEZE_PATTERNS_BY_STRATEGY.get(config.strategy, ())
     counts = {"trainable": 0, "frozen": 0}
     for name, p in model.named_parameters():
-        keep = True
-        if config.strategy == "vit_only" and _matches(name, _VIT_PATTERNS):
-            keep = False
-        elif config.strategy == "projector_only" and _matches(name, _PROJECTOR_PATTERNS):
-            keep = False
-        elif config.strategy == "lm_only" and _matches(name, _LM_PATTERNS):
-            keep = False
-        p.requires_grad_(keep)
-        counts["trainable" if keep else "frozen"] += p.numel()
+        should_freeze = bool(freeze_patterns) and _matches(name, freeze_patterns)
+        p.requires_grad_(not should_freeze)
+        bucket = "frozen" if should_freeze else "trainable"
+        counts[bucket] += p.numel()
     return counts
 
 

@@ -9,6 +9,7 @@ quality impact and no training-loop changes.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -59,19 +60,35 @@ class ScheduleConfig:
     kind: str = "cosine"  # cosine | linear | constant
 
 
+def _cosine_decay(progress: float) -> float:
+    return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+
+
+def _linear_decay(progress: float) -> float:
+    return max(0.0, 1.0 - progress)
+
+
+def _constant_decay(progress: float) -> float:
+    return 1.0
+
+
+_DECAY_BY_KIND: dict[str, Callable[[float], float]] = {
+    "cosine": _cosine_decay,
+    "linear": _linear_decay,
+    "constant": _constant_decay,
+}
+
+
 def build_scheduler(
     optimizer: torch.optim.Optimizer, cfg: ScheduleConfig
 ) -> torch.optim.lr_scheduler._LRScheduler:
     warmup_steps = max(1, math.ceil(cfg.warmup_pct * cfg.total_steps))
+    decay_fn = _DECAY_BY_KIND.get(cfg.kind, _constant_decay)
 
     def _lr(step: int) -> float:
         if step < warmup_steps:
             return step / max(1, warmup_steps)
         progress = (step - warmup_steps) / max(1, cfg.total_steps - warmup_steps)
-        if cfg.kind == "cosine":
-            return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
-        if cfg.kind == "linear":
-            return max(0.0, 1.0 - progress)
-        return 1.0  # constant
+        return decay_fn(progress)
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr)

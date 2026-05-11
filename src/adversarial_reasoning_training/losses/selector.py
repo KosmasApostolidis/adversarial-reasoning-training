@@ -28,79 +28,94 @@ class LossCallResult:
     components: dict[str, float]
 
 
+def _trades_closure(config: LossConfig):
+    def _fn(
+        logits_clean: torch.Tensor,
+        logits_adv: torch.Tensor,
+        input_ids: torch.Tensor,
+        task_mask: torch.Tensor,
+        traj_mask: torch.Tensor,
+    ) -> LossCallResult:
+        out: TradesOutput = trades_loss(
+            logits_clean, logits_adv, input_ids,
+            task_mask, traj_mask,
+            beta=config.beta, temperature=config.temperature,
+            task_weight=config.task_weight,
+        )
+        return LossCallResult(
+            total=out.total,
+            components={
+                "loss_total": float(out.total.detach()),
+                "loss_task": float(out.task.detach()),
+                "loss_kl": float(out.kl.detach()),
+                "beta": config.beta,
+                "task_weight": config.task_weight,
+            },
+        )
+    return _fn
+
+
+def _pgd_at_closure(config: LossConfig):
+    def _fn(
+        logits_clean: torch.Tensor,
+        logits_adv: torch.Tensor,
+        input_ids: torch.Tensor,
+        task_mask: torch.Tensor,
+        traj_mask: torch.Tensor,
+    ) -> LossCallResult:
+        out: PgdAtOutput = pgd_at_loss(logits_adv, input_ids, task_mask)
+        return LossCallResult(
+            total=out.total,
+            components={
+                "loss_total": float(out.total.detach()),
+                "loss_task_adv": float(out.task_adv.detach()),
+            },
+        )
+    return _fn
+
+
+def _oaat_closure(config: LossConfig):
+    def _fn(
+        logits_clean: torch.Tensor,
+        logits_adv: torch.Tensor,
+        input_ids: torch.Tensor,
+        task_mask: torch.Tensor,
+        traj_mask: torch.Tensor,
+    ) -> LossCallResult:
+        out: OaatOutput = oaat_loss(
+            logits_clean, logits_adv, input_ids, task_mask, alpha=config.alpha,
+        )
+        return LossCallResult(
+            total=out.total,
+            components={
+                "loss_total": float(out.total.detach()),
+                "loss_task_clean": float(out.task_clean.detach()),
+                "loss_task_adv": float(out.task_adv.detach()),
+                "alpha": config.alpha,
+            },
+        )
+    return _fn
+
+
+_LOSS_BUILDERS: dict[str, Any] = {
+    "trades": _trades_closure,
+    "pgd_at": _pgd_at_closure,
+    "oaat": _oaat_closure,
+}
+
+
 def build_loss(config: LossConfig):
     """Return a closure (logits_clean, logits_adv, input_ids, task_mask, traj_mask) -> LossCallResult."""
     defense = config.defense.lower()
-    if defense == "trades":
-        def _fn(
-            logits_clean: torch.Tensor,
-            logits_adv: torch.Tensor,
-            input_ids: torch.Tensor,
-            task_mask: torch.Tensor,
-            traj_mask: torch.Tensor,
-        ) -> LossCallResult:
-            out: TradesOutput = trades_loss(
-                logits_clean, logits_adv, input_ids,
-                task_mask, traj_mask,
-                beta=config.beta, temperature=config.temperature,
-                task_weight=config.task_weight,
-            )
-            return LossCallResult(
-                total=out.total,
-                components={
-                    "loss_total": float(out.total.detach()),
-                    "loss_task": float(out.task.detach()),
-                    "loss_kl": float(out.kl.detach()),
-                    "beta": config.beta,
-                    "task_weight": config.task_weight,
-                },
-            )
-        _fn.config = config
-        return _fn
-
-    if defense == "pgd_at":
-        def _fn(
-            logits_clean: torch.Tensor,
-            logits_adv: torch.Tensor,
-            input_ids: torch.Tensor,
-            task_mask: torch.Tensor,
-            traj_mask: torch.Tensor,
-        ) -> LossCallResult:
-            out: PgdAtOutput = pgd_at_loss(logits_adv, input_ids, task_mask)
-            return LossCallResult(
-                total=out.total,
-                components={
-                    "loss_total": float(out.total.detach()),
-                    "loss_task_adv": float(out.task_adv.detach()),
-                },
-            )
-        _fn.config = config
-        return _fn
-
-    if defense == "oaat":
-        def _fn(
-            logits_clean: torch.Tensor,
-            logits_adv: torch.Tensor,
-            input_ids: torch.Tensor,
-            task_mask: torch.Tensor,
-            traj_mask: torch.Tensor,
-        ) -> LossCallResult:
-            out: OaatOutput = oaat_loss(
-                logits_clean, logits_adv, input_ids, task_mask, alpha=config.alpha,
-            )
-            return LossCallResult(
-                total=out.total,
-                components={
-                    "loss_total": float(out.total.detach()),
-                    "loss_task_clean": float(out.task_clean.detach()),
-                    "loss_task_adv": float(out.task_adv.detach()),
-                    "alpha": config.alpha,
-                },
-            )
-        _fn.config = config
-        return _fn
-
-    raise ValueError(f"Unknown defense: {config.defense!r}. Expected trades|pgd_at|oaat.")
+    builder = _LOSS_BUILDERS.get(defense)
+    if builder is None:
+        raise ValueError(
+            f"Unknown defense: {config.defense!r}. "
+            f"Expected one of {sorted(_LOSS_BUILDERS)}."
+        )
+    fn = builder(config)
+    fn.config = config
+    return fn
 
 
 def from_cfg_dict(d: dict[str, Any]) -> LossConfig:
