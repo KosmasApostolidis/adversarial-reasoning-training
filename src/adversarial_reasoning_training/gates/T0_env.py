@@ -65,6 +65,48 @@ def _role_grad_norm(model: torch.nn.Module, patterns: tuple[str, ...]) -> float:
     return total**0.5
 
 
+@dataclass(frozen=True)
+class _RoleGradNorms:
+    vit: float
+    projector: float
+    lm: float
+
+    @property
+    def all_zero(self) -> bool:
+        return self.vit == 0.0 and self.projector == 0.0 and self.lm == 0.0
+
+
+def _collect_role_grad_norms(model: torch.nn.Module) -> _RoleGradNorms:
+    return _RoleGradNorms(
+        vit=_role_grad_norm(model, _VIT_PATTERNS),
+        projector=_role_grad_norm(model, _PROJECTOR_PATTERNS),
+        lm=_role_grad_norm(model, _LM_PATTERNS),
+    )
+
+
+def _evaluate_t0_verdict(
+    *,
+    loss_total: torch.Tensor,
+    grad_norms: _RoleGradNorms,
+    peak_gb: float,
+    peak_memory_limit_gb: float,
+) -> tuple[bool, list[str]]:
+    notes: list[str] = []
+    passed = True
+    if not torch.isfinite(loss_total).item():
+        passed = False
+        notes.append("loss is NaN or Inf")
+    if grad_norms.all_zero:
+        passed = False
+        notes.append("no gradient reached any role group")
+    if peak_gb > peak_memory_limit_gb:
+        passed = False
+        notes.append(
+            f"peak memory {peak_gb:.1f} GiB exceeds limit {peak_memory_limit_gb:.1f} GiB"
+        )
+    return passed, notes
+
+
 def run_t0(
     *,
     vlm: Any,
@@ -130,34 +172,24 @@ def run_t0(
 
     loss_out.total.backward()
 
-    gn_vit = _role_grad_norm(model, _VIT_PATTERNS)
-    gn_proj = _role_grad_norm(model, _PROJECTOR_PATTERNS)
-    gn_lm = _role_grad_norm(model, _LM_PATTERNS)
+    grad_norms = _collect_role_grad_norms(model)
+    peak_gb = current_memory_stats().peak_allocated_gb
 
-    mem = current_memory_stats()
-    peak_gb = mem.peak_allocated_gb
-
-    loss_clean = float(loss_out.components.get("loss_task", float("nan")))
-    loss_total = float(loss_out.total.detach())
-
-    passed = True
-    if not (torch.isfinite(loss_out.total)).item():
-        passed = False
-        notes.append("loss is NaN or Inf")
-    if gn_vit == 0.0 and gn_proj == 0.0 and gn_lm == 0.0:
-        passed = False
-        notes.append("no gradient reached any role group")
-    if peak_gb > peak_memory_limit_gb:
-        passed = False
-        notes.append(f"peak memory {peak_gb:.1f} GiB exceeds limit {peak_memory_limit_gb:.1f} GiB")
+    passed, verdict_notes = _evaluate_t0_verdict(
+        loss_total=loss_out.total,
+        grad_norms=grad_norms,
+        peak_gb=peak_gb,
+        peak_memory_limit_gb=peak_memory_limit_gb,
+    )
+    notes.extend(verdict_notes)
 
     result = T0Result(
         passed=passed,
-        loss_clean=loss_clean,
-        loss_total=loss_total,
-        grad_norm_vit=gn_vit,
-        grad_norm_projector=gn_proj,
-        grad_norm_lm=gn_lm,
+        loss_clean=float(loss_out.components.get("loss_task", float("nan"))),
+        loss_total=float(loss_out.total.detach()),
+        grad_norm_vit=grad_norms.vit,
+        grad_norm_projector=grad_norms.projector,
+        grad_norm_lm=grad_norms.lm,
         peak_memory_gb=peak_gb,
         peak_memory_limit_gb=peak_memory_limit_gb,
         duration_s=time.time() - start,

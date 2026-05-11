@@ -48,28 +48,56 @@ class CheckpointRegistry:
         epoch: int,
         metric_value: float | None,
         extra: dict[str, Any] | None = None,
-        include_optimizer: bool = True,
     ) -> Path:
-        """Save a new checkpoint as `latest` and — if metric improved — as `best`.
+        """Save a full-state checkpoint (model + optimizer)."""
+        payload = self._build_payload(model, step, epoch, metric_value, extra)
+        if optimizer is not None:
+            payload["optim_state_dict"] = optimizer.state_dict()
+        return self._write_and_rotate(payload, step, epoch, metric_value)
 
-        ``include_optimizer=False`` writes a weights-only checkpoint (model
-        state_dict + scalar metadata, no optimizer m/v state). Used for the
-        periodic ``save_every`` cadence so frequent saves don't blow disk;
-        end-of-fit and best-on-eval saves still include the optimizer for
-        full-state resume.
+    def save_weights_only(
+        self,
+        *,
+        model: torch.nn.Module,
+        step: int,
+        epoch: int,
+        metric_value: float | None,
+        extra: dict[str, Any] | None = None,
+    ) -> Path:
+        """Save a weights-only checkpoint (model state_dict + metadata, no optimizer).
+
+        Used by the periodic ``save_every`` cadence so frequent saves don't
+        blow disk on long runs.
         """
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        stem = f"step{step:07d}-ep{epoch:02d}-{ts}"
-        latest = self.ckpt_dir / f"{stem}.pt"
-        payload: dict[str, Any] = {
+        payload = self._build_payload(model, step, epoch, metric_value, extra)
+        return self._write_and_rotate(payload, step, epoch, metric_value)
+
+    def _build_payload(
+        self,
+        model: torch.nn.Module,
+        step: int,
+        epoch: int,
+        metric_value: float | None,
+        extra: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return {
             "model_state_dict": model.state_dict(),
             "step": step,
             "epoch": epoch,
             "metric_value": metric_value,
             "extra": extra or {},
         }
-        if include_optimizer and optimizer is not None:
-            payload["optim_state_dict"] = optimizer.state_dict()
+
+    def _write_and_rotate(
+        self,
+        payload: dict[str, Any],
+        step: int,
+        epoch: int,
+        metric_value: float | None,
+    ) -> Path:
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        stem = f"step{step:07d}-ep{epoch:02d}-{ts}"
+        latest = self.ckpt_dir / f"{stem}.pt"
         torch.save(payload, latest)
         self._rm_old_latest(latest)
         self.latest_path = latest

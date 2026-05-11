@@ -127,10 +127,7 @@ class AdvTrainer:
         }[self.config.amp_dtype]
 
     def _append_log_record(self, record: dict[str, Any]) -> None:
-        """Append one JSON-line record to ``self.log_path``.
-
-        Renamed from ``_log`` so the file I/O side-effect is explicit.
-        """
+        """Append one JSON-line record to ``self.log_path``."""
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -255,43 +252,45 @@ class AdvTrainer:
         loss_out: LossCallResult,
         diag: dict[str, float],
     ) -> None:
-        if self._global_step % self.config.log_every != 0:
-            return
-        mem = current_memory_stats()
-        self._append_log_record({
-            "event": "train_step",
-            "global_step": self._global_step,
-            "epoch": epoch,
-            "avg_loss": avg_loss,
-            "accum_count": steps_in_window,
-            "wall_s": time.time() - start_time,
-            "grad_norm": float(total_norm),
-            "step_reason": reason,
-            **loss_out.components,
-            **diag,
-            **mem.as_dict(),
-        })
+        if self._global_step % self.config.log_every == 0:
+            mem = current_memory_stats()
+            self._append_log_record({
+                "event": "train_step",
+                "global_step": self._global_step,
+                "epoch": epoch,
+                "avg_loss": avg_loss,
+                "accum_count": steps_in_window,
+                "wall_s": time.time() - start_time,
+                "grad_norm": float(total_norm),
+                "step_reason": reason,
+                **loss_out.components,
+                **diag,
+                **mem.as_dict(),
+            })
 
     def _maybe_save_periodic(self, epoch: int) -> None:
-        if self.config.save_every <= 0:
-            return
-        if self._global_step % self.config.save_every != 0:
-            return
-        self.ckpt.save(
-            model=self.model,
-            optimizer=self.optimizer,
-            step=self._global_step,
-            epoch=epoch,
-            metric_value=None,
-            extra={"reason": "save_every"},
-            include_optimizer=False,
+        should_save = (
+            self.config.save_every > 0
+            and self._global_step % self.config.save_every == 0
         )
+        if should_save:
+            self.ckpt.save_weights_only(
+                model=self.model,
+                step=self._global_step,
+                epoch=epoch,
+                metric_value=None,
+                extra={"reason": "save_every"},
+            )
 
     def _maybe_eval_periodic(self, epoch: int) -> None:
-        if self.config.eval_every <= 0:
-            return
-        if self._global_step % self.config.eval_every != 0:
-            return
+        should_eval = (
+            self.config.eval_every > 0
+            and self._global_step % self.config.eval_every == 0
+        )
+        if should_eval:
+            self._run_eval_and_save(epoch)
+
+    def _run_eval_and_save(self, epoch: int) -> None:
         metrics = self.evaluator(self._global_step, epoch) if self.evaluator else {}
         metric_value = metrics.get(self.metric_for_best) if metrics else None
         self._append_log_record({
@@ -468,15 +467,23 @@ class AdvTrainer:
         global_step = self._global_step
         metrics = self.evaluator(global_step, self.config.epochs) if self.evaluator else {}
         metric_value = metrics.get(self.metric_for_best) if metrics else None
-        self.ckpt.save(
-            model=self.model,
-            optimizer=self.optimizer,
-            step=max(1, global_step),
-            epoch=self.config.epochs,
-            metric_value=metric_value,
-            extra={"metrics": metrics, "final": True},
-            include_optimizer=self.config.final_save_include_optimizer,
-        )
+        if self.config.final_save_include_optimizer:
+            self.ckpt.save(
+                model=self.model,
+                optimizer=self.optimizer,
+                step=max(1, global_step),
+                epoch=self.config.epochs,
+                metric_value=metric_value,
+                extra={"metrics": metrics, "final": True},
+            )
+        else:
+            self.ckpt.save_weights_only(
+                model=self.model,
+                step=max(1, global_step),
+                epoch=self.config.epochs,
+                metric_value=metric_value,
+                extra={"metrics": metrics, "final": True},
+            )
         duration_s = time.time() - start_time
         final_mem = current_memory_stats()
         self._append_log_record({

@@ -248,7 +248,7 @@ def test_maybe_save_periodic_skipped_when_disabled(tmp_path: Path) -> None:
     trainer.config.save_every = 0
     trainer._global_step = 10
     calls: list[dict[str, Any]] = []
-    trainer.ckpt.save = lambda **kw: calls.append(kw)  # type: ignore[assignment]
+    trainer.ckpt.save_weights_only = lambda **kw: calls.append(kw)  # type: ignore[assignment]
     trainer._maybe_save_periodic(epoch=1)
     assert calls == []
 
@@ -259,7 +259,7 @@ def test_maybe_save_periodic_fires_when_step_aligns(tmp_path: Path) -> None:
     trainer.config.save_every = 5
     trainer._global_step = 5
     calls: list[dict[str, Any]] = []
-    trainer.ckpt.save = lambda **kw: calls.append(kw)  # type: ignore[assignment]
+    trainer.ckpt.save_weights_only = lambda **kw: calls.append(kw)  # type: ignore[assignment]
     trainer._maybe_save_periodic(epoch=1)
     assert len(calls) == 1
     assert calls[0]["step"] == 5
