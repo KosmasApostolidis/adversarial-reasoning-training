@@ -10,6 +10,7 @@ from adversarial_reasoning.agents.base import ToolCall, Trajectory  # type: igno
 from PIL import Image
 
 from adversarial_reasoning_training.data.gold import (
+    GoldKey,
     gold_exists,
     load_gold,
     save_gold,
@@ -33,21 +34,30 @@ def _traj() -> Trajectory:
     )
 
 
+def _key(img: Image.Image, prompt: str = "prompt", oracle_version: str = "v1") -> GoldKey:
+    return GoldKey(
+        task_id="task",
+        sample_id="s",
+        prompt=prompt,
+        image=img,
+        oracle_version=oracle_version,
+    )
+
+
 def test_gold_exists_false_before_save(tmp_path: Path) -> None:
-    img = _img()
-    assert not gold_exists(tmp_path, "task", "s", "prompt", img, "v1")
+    assert not gold_exists(tmp_path, _key(_img()))
 
 
 def test_save_and_gold_exists_true(tmp_path: Path) -> None:
     img = _img()
-    save_gold(tmp_path, "task", "s", "prompt", img, "v1", _traj())
-    assert gold_exists(tmp_path, "task", "s", "prompt", img, "v1")
+    save_gold(tmp_path, _key(img), _traj())
+    assert gold_exists(tmp_path, _key(img))
 
 
 def test_save_and_load_roundtrip_preserves_fields(tmp_path: Path) -> None:
     img = _img()
-    save_gold(tmp_path, "task", "s", "prompt", img, "v1", _traj())
-    loaded = load_gold(tmp_path, "task", "s", "prompt", img, "v1")
+    save_gold(tmp_path, _key(img), _traj())
+    loaded = load_gold(tmp_path, _key(img))
     assert loaded.task_id == "t"
     assert loaded.model_id == "oracle"
     assert loaded.seed == 0
@@ -60,17 +70,17 @@ def test_save_and_load_roundtrip_preserves_fields(tmp_path: Path) -> None:
 
 def test_load_gold_raises_when_missing(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="not cached"):
-        load_gold(tmp_path, "task", "s", "prompt", _img(), "v1")
+        load_gold(tmp_path, _key(_img()))
 
 
 def test_save_creates_parent_directory(tmp_path: Path) -> None:
     deep = tmp_path / "a" / "b" / "c"
-    save_gold(deep, "task", "s", "prompt", _img(), "v1", _traj())
+    save_gold(deep, _key(_img()), _traj())
     assert deep.is_dir()
 
 
 def test_save_returns_path_under_cache_dir(tmp_path: Path) -> None:
-    out_path = save_gold(tmp_path, "task", "s", "prompt", _img(), "v1", _traj())
+    out_path = save_gold(tmp_path, _key(_img()), _traj())
     assert out_path.is_file()
     assert out_path.parent == tmp_path
     assert out_path.suffix == ".json"
@@ -78,11 +88,11 @@ def test_save_returns_path_under_cache_dir(tmp_path: Path) -> None:
 
 def test_different_oracle_versions_isolate_caches(tmp_path: Path) -> None:
     img = _img()
-    save_gold(tmp_path, "task", "s", "prompt", img, "v1", _traj())
-    assert not gold_exists(tmp_path, "task", "s", "prompt", img, "v2")
+    save_gold(tmp_path, _key(img, oracle_version="v1"), _traj())
+    assert not gold_exists(tmp_path, _key(img, oracle_version="v2"))
 
 
 def test_different_prompts_isolate_caches(tmp_path: Path) -> None:
     img = _img()
-    save_gold(tmp_path, "task", "s", "prompt-A", img, "v1", _traj())
-    assert not gold_exists(tmp_path, "task", "s", "prompt-B", img, "v1")
+    save_gold(tmp_path, _key(img, prompt="prompt-A"), _traj())
+    assert not gold_exists(tmp_path, _key(img, prompt="prompt-B"))

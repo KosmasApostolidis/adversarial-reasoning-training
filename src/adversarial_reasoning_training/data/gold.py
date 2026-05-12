@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
@@ -11,32 +12,30 @@ from PIL import Image
 from ..utils.hashing import gold_cache_key
 
 
-def _cache_path(cache_dir: str | Path, key: str) -> Path:
-    return Path(cache_dir) / f"{key}.json"
+@dataclass(frozen=True)
+class GoldKey:
+    """Identity tuple for a cached gold trajectory."""
+    task_id: str
+    sample_id: str
+    prompt: str
+    image: Image.Image
+    oracle_version: str
+
+    def _cache_key(self) -> str:
+        return gold_cache_key(
+            self.task_id, self.sample_id, self.prompt, self.image, self.oracle_version
+        )
 
 
-def gold_exists(
-    cache_dir: str | Path,
-    task_id: str,
-    sample_id: str,
-    prompt: str,
-    image: Image.Image,
-    oracle_version: str,
-) -> bool:
-    key = gold_cache_key(task_id, sample_id, prompt, image, oracle_version)
+def _cache_path(cache_dir: str | Path, key: GoldKey) -> Path:
+    return Path(cache_dir) / f"{key._cache_key()}.json"
+
+
+def gold_exists(cache_dir: str | Path, key: GoldKey) -> bool:
     return _cache_path(cache_dir, key).exists()
 
 
-def save_gold(
-    cache_dir: str | Path,
-    task_id: str,
-    sample_id: str,
-    prompt: str,
-    image: Image.Image,
-    oracle_version: str,
-    trajectory: Trajectory,
-) -> Path:
-    key = gold_cache_key(task_id, sample_id, prompt, image, oracle_version)
+def save_gold(cache_dir: str | Path, key: GoldKey, trajectory: Trajectory) -> Path:
     path = _cache_path(cache_dir, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -44,16 +43,8 @@ def save_gold(
     return path
 
 
-def load_gold(
-    cache_dir: str | Path,
-    task_id: str,
-    sample_id: str,
-    prompt: str,
-    image: Image.Image,
-    oracle_version: str,
-) -> Trajectory:
+def load_gold(cache_dir: str | Path, key: GoldKey) -> Trajectory:
     """Load a cached gold Trajectory or raise FileNotFoundError if absent."""
-    key = gold_cache_key(task_id, sample_id, prompt, image, oracle_version)
     path = _cache_path(cache_dir, key)
     if not path.exists():
         raise FileNotFoundError(

@@ -3,9 +3,9 @@
 Drives sample iteration via the attacks-repo task loader (real or
 synthetic), looks up metadata in an optional CSV (keyed by ``sample_id``),
 runs the rule-based oracle, and writes one JSON per sample to the cache
-dir using the multi-arg ``save_gold(cache_dir, task_id, sample_id, prompt,
-image, oracle_version, trajectory)`` API. Re-runs are idempotent — the
-cache key is content-addressed (oracle_version + prompt + image hash).
+dir via ``save_gold(cache_dir, GoldKey(...), trajectory)``. Re-runs are
+idempotent — the cache key is content-addressed (oracle_version + prompt
++ image hash).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..data.gold import gold_exists, save_gold
+from ..data.gold import GoldKey, gold_exists, save_gold
 from ..gold.oracle import (
     OracleConfig,
     generate_trajectory,
@@ -74,15 +74,21 @@ def main(argv: list[str] | None = None) -> int:
     for s in samples:
         sid = s.sample_id
         meta = metadata_lookup.get(sid, {})
-        if gold_exists(cache_dir, task_id, sid, s.prompt, s.image, oracle_cfg.version) \
-                and not args.overwrite:
+        key = GoldKey(
+            task_id=task_id,
+            sample_id=sid,
+            prompt=s.prompt,
+            image=s.image,
+            oracle_version=oracle_cfg.version,
+        )
+        if gold_exists(cache_dir, key) and not args.overwrite:
             n_skipped += 1
             continue
 
         traj = generate_trajectory(
             task_id=task_id, sample_id=sid, metadata=meta, config=oracle_cfg,
         )
-        save_gold(cache_dir, task_id, sid, s.prompt, s.image, oracle_cfg.version, traj)
+        save_gold(cache_dir, key, traj)
         n_written += 1
 
     summary = {

@@ -12,7 +12,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from ..gold.oracle import generate_trajectory
-from .gold import gold_exists, load_gold, save_gold
+from .gold import GoldKey, gold_exists, load_gold, save_gold
 
 
 @dataclass(frozen=True)
@@ -66,19 +66,19 @@ class ProstateXTrainDS(Dataset):
     def __getitem__(self, idx: int) -> TrainSample:
         s = self.samples[idx]
         md = self.metadata_lookup.get(s.sample_id, {})
-        if gold_exists(
-            self.cache_dir, s.task_id, s.sample_id, s.prompt, s.image, self.oracle_version
-        ):
-            traj = load_gold(
-                self.cache_dir, s.task_id, s.sample_id, s.prompt, s.image, self.oracle_version
-            )
+        key = GoldKey(
+            task_id=s.task_id,
+            sample_id=s.sample_id,
+            prompt=s.prompt,
+            image=s.image,
+            oracle_version=self.oracle_version,
+        )
+        if gold_exists(self.cache_dir, key):
+            traj = load_gold(self.cache_dir, key)
         else:
             traj = generate_trajectory(s.task_id, s.sample_id, md)
             if self.write_back:
-                save_gold(
-                    self.cache_dir, s.task_id, s.sample_id, s.prompt, s.image,
-                    self.oracle_version, traj,
-                )
+                save_gold(self.cache_dir, key, traj)
         return TrainSample(
             task_id=s.task_id,
             sample_id=s.sample_id,
