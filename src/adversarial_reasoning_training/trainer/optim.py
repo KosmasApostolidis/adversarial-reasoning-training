@@ -85,10 +85,10 @@ def build_scheduler(
     warmup_steps = max(1, math.ceil(cfg.warmup_pct * cfg.total_steps))
     decay_fn = _DECAY_BY_KIND.get(cfg.kind, _constant_decay)
 
-    def _lr(step: int) -> float:
+    def lr_lambda(step: int) -> float:
         if step < warmup_steps:
             return step / max(1, warmup_steps)
         progress = (step - warmup_steps) / max(1, cfg.total_steps - warmup_steps)
         return decay_fn(progress)
 
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr)
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
