@@ -29,7 +29,7 @@ class LossCallResult:
 
 
 def _trades_closure(config: LossConfig):
-    def _fn(
+    def loss_fn(
         logits_clean: torch.Tensor,
         logits_adv: torch.Tensor,
         input_ids: torch.Tensor,
@@ -52,11 +52,11 @@ def _trades_closure(config: LossConfig):
                 "task_weight": config.task_weight,
             },
         )
-    return _fn
+    return loss_fn
 
 
 def _pgd_at_closure(config: LossConfig):
-    def _fn(
+    def loss_fn(
         logits_clean: torch.Tensor,
         logits_adv: torch.Tensor,
         input_ids: torch.Tensor,
@@ -71,11 +71,11 @@ def _pgd_at_closure(config: LossConfig):
                 "loss_task_adv": float(out.task_adv.detach()),
             },
         )
-    return _fn
+    return loss_fn
 
 
 def _oaat_closure(config: LossConfig):
-    def _fn(
+    def loss_fn(
         logits_clean: torch.Tensor,
         logits_adv: torch.Tensor,
         input_ids: torch.Tensor,
@@ -94,7 +94,7 @@ def _oaat_closure(config: LossConfig):
                 "alpha": config.alpha,
             },
         )
-    return _fn
+    return loss_fn
 
 
 _LOSS_BUILDERS: dict[str, Any] = {
@@ -113,9 +113,9 @@ def build_loss(config: LossConfig):
             f"Unknown defense: {config.defense!r}. "
             f"Expected one of {sorted(_LOSS_BUILDERS)}."
         )
-    fn = builder(config)
-    fn.config = config
-    return fn
+    loss_fn = builder(config)
+    loss_fn.config = config
+    return loss_fn
 
 
 def from_cfg_dict(d: dict[str, Any]) -> LossConfig:
