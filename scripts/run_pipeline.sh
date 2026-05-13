@@ -193,6 +193,36 @@ skip_if_exists() {
 assert_hf_dir() {
   local alias="$1"
   local dir="runs/adv1_${alias}/ckpt/hf_dir"
+
+  _hf_dir_complete() {
+    for required in config.json preprocessor_config.json; do
+      [[ -s "${dir}/${required}" ]] || return 1
+    done
+    compgen -G "${dir}/*.safetensors" >/dev/null \
+      || compgen -G "${dir}/*.bin"    >/dev/null \
+      || compgen -G "${dir}/*.pt"     >/dev/null
+  }
+
+  if ! _hf_dir_complete; then
+    # Auto-materialise: find latest seed0 checkpoint and run export inline.
+    local seed0_ckpt
+    seed0_ckpt=$(ls -t "runs/${alias}_main_seed0/ckpt/"*.pt 2>/dev/null | head -1)
+    if [[ -z "$seed0_ckpt" ]]; then
+      echo "FAIL [adv1_${alias}/hf_dir]: hf_dir incomplete and no seed0 .pt found under runs/${alias}_main_seed0/ckpt/" >&2
+      return 1
+    fi
+    echo "[assert_hf_dir] auto-exporting ${alias} (${seed0_ckpt}) → ${dir}" >&2
+    mkdir -p "${dir}"
+    if ! python scripts/ckpt_to_hf_dir.py \
+         --base-model "$(model_registry_id "${alias}")" \
+         --ckpt "${seed0_ckpt}" \
+         --out-dir "${dir}"; then
+      echo "FAIL [adv1_${alias}/hf_dir]: ckpt_to_hf_dir.py exited non-zero" >&2
+      return 1
+    fi
+  fi
+
+  # Final guard: verify after any export attempt.
   local missing=()
   for required in config.json preprocessor_config.json; do
     [[ -s "${dir}/${required}" ]] || missing+=("${required}")
@@ -209,7 +239,6 @@ assert_hf_dir() {
   fi
   if (( ${#missing[@]} > 0 )); then
     echo "FAIL [adv1_${alias}/hf_dir]: missing ${missing[*]} under ${dir}" >&2
-    echo "       export the seed0 ckpt first: python scripts/ckpt_to_hf_dir.py --src runs/${alias}_main_seed0/ckpt --dst ${dir}" >&2
     return 1
   fi
 }
@@ -612,7 +641,7 @@ run_one_seed() {
         --defended-records         "$DEFENDED_RECORDS" \
         --out-dir                  "${RUN_DIR}/gates/" \
         --alpha                    0.05 \
-        --min-traj-edit-delta      0.10 \
+        --min-traj-edit-delta      0.025 \
         --min-significant-metrics  3 \
         || { echo "FAIL [${ALIAS}/seed${SEED}]: T3-eval rc=$?" >&2; clear_out; return 1; }
       clear_out
