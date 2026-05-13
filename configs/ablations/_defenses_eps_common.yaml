@@ -1,0 +1,15 @@
+# Shared body for epsilon-schedule ablation configs.
+# Each sibling file sets its own `pgd.eps_schedule` block
+# and extends this base for trades / pgd_at / oaat defaults.
+# See: configs/defenses.yaml for the full canonical source.
+
+trades:
+  beta_start: 6.0
+  beta_end: 3.0
+  temperature: 2.0
+
+pgd_at:
+  # no extra knobs
+
+oaat:
+  alpha: 0.5

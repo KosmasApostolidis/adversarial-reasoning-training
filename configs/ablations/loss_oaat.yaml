@@ -1,34 +1,6 @@
 # Ablation: loss axis — OAAT (clean + adv interpolation).
-#
-# Diff vs configs/training.yaml: defense = oaat. The alpha mixing weight
-# lives in configs/defenses.yaml under oaat.alpha (default 0.5).
 # Pass via `--config configs/ablations/loss_oaat.yaml` to art-train.
 
-defense: oaat               # trades | pgd_at | oaat
-seed: 0
+_extends: _loss_common.yaml
 
-epochs: 5                   # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..5)
-micro_batch: 1
-grad_accum: 8
-
-optim: adamw8bit
-lr:
-  lm: 5.0e-6
-  projector: 1.0e-5
-  vit: 1.0e-6
-weight_decay: 0.0
-betas: [0.9, 0.999]
-
-schedule: cosine
-warmup_pct: 0.03
-
-grad_ckpt: true
-amp: bf16
-grad_clip_norm: 1.0
-
-log_every: 20
-eval_every: 200
-ckpt_keep: 2
-final_save_include_optimizer: false
-
-metric_for_best: tool_name_acc
+defense: oaat

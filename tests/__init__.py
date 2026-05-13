@@ -1,0 +1,1 @@
+"""Tests for adversarial reasoning training — gates, trainer, data, and eval."""
