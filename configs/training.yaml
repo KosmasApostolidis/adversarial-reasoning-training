@@ -5,10 +5,10 @@
 #   pgd_at  : L = task_ce(adv)
 #   oaat    : L = alpha * task_ce(clean) + (1-alpha) * task_ce(adv)
 
-defense: trades             # trades | pgd_at | oaat
+defense: pgd_at             # trades | pgd_at | oaat
 seed: 0
 
-epochs: 5                   # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..5)
+epochs: 8                   # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..8)
 micro_batch: 1
 grad_accum: 8               # effective batch size = 8
 
