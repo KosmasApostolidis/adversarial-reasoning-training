@@ -38,6 +38,16 @@ DEFAULT_GATE_CONFIG_PATHS: dict[str, str] = {
     "gold": "configs/gold.yaml",
 }
 
+# Default PGD inner steps used by gates and CLI ablation configs.
+PGD_STEPS_DEFAULT: int = 7
+
+# Default gradient accumulation steps used by gate CLI defaults.
+GRAD_ACCUM_DEFAULT: int = 8
+
+# Logging and evaluation cadence defaults.
+LOG_EVERY_DEFAULT: int = 20
+EVAL_EVERY_DEFAULT: int = 200
+
 
 class VLMFamily(str, Enum):
     """Canonical VLM family identifiers used by the dispatch logic.
@@ -59,6 +69,10 @@ __all__ = [
     "EPS_2_255",
     "EPS_4_255",
     "EPS_8_255",
+    "EVAL_EVERY_DEFAULT",
+    "GRAD_ACCUM_DEFAULT",
     "GRAD_CLIP_NORM",
+    "LOG_EVERY_DEFAULT",
+    "PGD_STEPS_DEFAULT",
     "VLMFamily",
 ]

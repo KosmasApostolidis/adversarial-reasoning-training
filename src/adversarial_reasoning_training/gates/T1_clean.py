@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from ..data.collator import TFCollator
 from ..losses.task_ce import task_ce
+from ..utils.constants import GRAD_ACCUM_DEFAULT
 from ._common import (
     build_metadata_lookup,
     build_train_dataset,
@@ -245,7 +246,7 @@ def _main() -> int:
     parser.add_argument("--device", type=str, default="cuda")
     defaults = T1Thresholds()
     parser.add_argument("--max-steps", type=int, default=defaults.max_steps)
-    parser.add_argument("--grad-accum", type=int, default=8)
+    parser.add_argument("--grad-accum", type=int, default=GRAD_ACCUM_DEFAULT)
     parser.add_argument("--tool-name-acc-min", type=float, default=defaults.tool_name_acc_min)
     parser.add_argument("--answer-em-min", type=float, default=defaults.answer_em_min)
     args = parser.parse_args()

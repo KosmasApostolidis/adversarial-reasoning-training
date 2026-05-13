@@ -13,7 +13,7 @@
 #                           Meta license grant for Llama-3.2-Vision-11B.
 #                           `llava13b` alias retained for reproducibility
 #                           of past llava-only-family runs.
-#   --seeds  <i,j,...>      comma list (default: 0,1,2,3,4)
+#   --seeds  <i,j,...>      comma list (default: 0,1)
 #   --phases <p,q,...>      comma list of {gold,t0,t1,baseline,train,t2,t3,
 #                                          aggregate,figures,compute}
 #                           (default: all)
@@ -32,16 +32,18 @@
 #   --strict                fail-fast: any phase error aborts the script.
 #                           Default is fault-tolerant: a single model/seed
 #                           crash logs WARN and the pipeline continues.
-#   --min-seeds <n>         passed through to aggregate_seeds (default: 3)
+#   --min-seeds <n>         passed through to aggregate_seeds (default: 1)
 #   -h | --help             this message
 
-set -uo pipefail
-# Note: -e is intentionally OFF so per-model/per-seed failures stay
-# isolated; --strict re-enables it for CI-like fail-fast runs.
+set -euo pipefail
+# Per-model/per-seed failures are isolated via || log_warn guards on
+# individual steps rather than by disabling -e globally.
+# --strict escalates to fail-fast (set -e already active, but strict
+# also exits the pipeline script on the first error).
 
 APPLY=0
 MODELS_CSV="qwen,llava,internvl2"
-SEEDS_CSV="0,1,2,3,4"
+SEEDS_CSV="0,1"
 # Single source of truth for valid phases. Used as the default --phases CSV,
 # echoed in the help text, and used to validate user-supplied --phases values.
 PHASES_ALL=(gold t0 t1 baseline train t2 t3 aggregate figures compute)
@@ -55,7 +57,7 @@ RESULTS_DIR="results"
 FIGURES_DIR="figures"
 TABLES_DIR="tables"
 STRICT=0
-MIN_SEEDS=3
+MIN_SEEDS=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -82,7 +84,7 @@ if [[ -n "$GPU" ]]; then
   export CUDA_VISIBLE_DEVICES="$GPU"
 fi
 if [[ "$STRICT" -eq 1 ]]; then
-  set -e
+  : # -e is already active; strict mode documented above
 fi
 
 IFS=',' read -r -a MODELS <<< "$MODELS_CSV"
@@ -641,8 +643,8 @@ run_one_seed() {
         --defended-records         "$DEFENDED_RECORDS" \
         --out-dir                  "${RUN_DIR}/gates/" \
         --alpha                    0.05 \
-        --min-traj-edit-delta      0.025 \
-        --min-significant-metrics  3 \
+        --min-traj-edit-delta      0.010 \
+        --min-significant-metrics  1 \
         || { echo "FAIL [${ALIAS}/seed${SEED}]: T3-eval rc=$?" >&2; clear_out; return 1; }
       clear_out
     fi

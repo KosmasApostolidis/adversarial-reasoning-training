@@ -34,6 +34,21 @@ def _base(task_id: str, sample_id: str, model_id: str = "oracle") -> dict[str, A
     }
 
 
+def _make_trajectory(
+    task_id: str,
+    sample_id: str,
+    tool_calls: list[ToolCall],
+    final_answer: str,
+    reasoning_trace: str,
+) -> Trajectory:
+    return Trajectory(
+        **_base(task_id, sample_id),
+        tool_calls=tool_calls,
+        final_answer=final_answer,
+        reasoning_trace=reasoning_trace,
+    )
+
+
 def template_pirads_1_2(
     metadata: dict[str, Any], task_id: str, sample_id: str
 ) -> Trajectory:
@@ -67,10 +82,7 @@ def template_pirads_1_2(
         f"PI-RADS {pi_rads} is benign per NCCN; cross-check guideline.\n---\n"
         "Biopsy not indicated at this score; return follow-up recommendation."
     )
-    return Trajectory(
-        **_base(task_id, sample_id), tool_calls=calls,
-        final_answer=answer, reasoning_trace=trace,
-    )
+    return _make_trajectory(task_id, sample_id, calls, answer, trace)
 
 
 def template_pirads_3(
@@ -110,10 +122,7 @@ def template_pirads_3(
         "Guideline recovered; apply thresholds.\n---\n"
         "Biopsy recommendation based on thresholds."
     )
-    return Trajectory(
-        **_base(task_id, sample_id), tool_calls=calls,
-        final_answer=answer, reasoning_trace=trace,
-    )
+    return _make_trajectory(task_id, sample_id, calls, answer, trace)
 
 
 def template_pirads_4(
@@ -147,10 +156,7 @@ def template_pirads_4(
         "Pull NCCN pathway for PI-RADS 4.\n---\n"
         "Targeted biopsy is the guideline-aligned recommendation."
     )
-    return Trajectory(
-        **_base(task_id, sample_id), tool_calls=calls,
-        final_answer=answer, reasoning_trace=trace,
-    )
+    return _make_trajectory(task_id, sample_id, calls, answer, trace)
 
 
 def template_pirads_5(
@@ -184,10 +190,7 @@ def template_pirads_5(
         "Retrieve NCCN PI-RADS 5 pathway.\n---\n"
         "Targeted biopsy + staging imaging recommended."
     )
-    return Trajectory(
-        **_base(task_id, sample_id), tool_calls=calls,
-        final_answer=answer, reasoning_trace=trace,
-    )
+    return _make_trajectory(task_id, sample_id, calls, answer, trace)
 
 
 def template_post_treatment(
@@ -214,10 +217,7 @@ def template_post_treatment(
         "Check post-treatment NCCN pathway.\n---\n"
         "Apply recurrence criteria to current PSA."
     )
-    return Trajectory(
-        **_base(task_id, sample_id), tool_calls=calls,
-        final_answer=answer, reasoning_trace=trace,
-    )
+    return _make_trajectory(task_id, sample_id, calls, answer, trace)
 
 
 TEMPLATES = {

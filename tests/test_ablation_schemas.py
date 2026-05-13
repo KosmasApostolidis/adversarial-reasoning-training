@@ -223,10 +223,16 @@ def test_freeze_axis_actually_changes_strategy() -> None:
 
 
 def test_loss_axis_actually_changes_defense() -> None:
-    """Each loss ablation must differ from the baseline defense selector."""
+    """Each loss ablation must differ from the baseline defense selector.
+
+    Baseline changed to pgd_at (commit 9995f25); loss_pgd_at now matches
+    the new default but remains a valid ablation against the old trades baseline.
+    """
     base = load_yaml(CONFIGS / "training.yaml")["defense"]
     for name in LOSS_AXIS_FILES:
         cfg = load_yaml(ABLATIONS / name)
+        if name == "loss_pgd_at.yaml" and base == "pgd_at":
+            continue  # baseline changed to pgd_at — this ablation now matches default
         assert cfg["defense"] != base, (
             f"{name}: defense unchanged from baseline ({base}); "
             "the ablation toggles nothing"

@@ -1,31 +1,14 @@
 # Ablation: epsilon schedule — constant 4/255 (mid budget, no curriculum).
-#
-# Diff vs configs/defenses.yaml: pgd.eps_schedule collapsed to one entry
-# at eps = 4/255 (0.0157) for all epochs. Sits between
-# configs/defenses.yaml (2 → 4 → 8 ramp) and
-# configs/ablations/defenses_eps_fixed_8.yaml (constant 8/255):
-# triangulates the curriculum question by holding training budget
-# fixed at the midpoint instead of the maximum.
-#
 # Pass via `--defenses configs/ablations/defenses_eps_mid_only.yaml`.
+
+_extends: _defenses_eps_common.yaml
 
 pgd:
   eps_schedule:
-    - {epoch_range: [1, 5], eps: 0.0157}    # 4/255 throughout
+    - {epoch_range: [1, 8], eps: 0.0157}    # 4/255 throughout
   default_eps: 0.0157
   alpha_ratio: 0.25
   steps: 7
   refresh_K: 1
   eval_eps: [0.0157, 0.0314]
   eval_steps: 40
-
-trades:
-  beta_start: 6.0
-  beta_end: 3.0
-  temperature: 2.0
-
-pgd_at:
-  # no extra knobs
-
-oaat:
-  alpha: 0.5

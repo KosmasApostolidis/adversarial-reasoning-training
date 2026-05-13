@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,7 +29,7 @@ class LossCallResult:
     components: dict[str, float]
 
 
-def _trades_closure(config: LossConfig):
+def _trades_closure(config: LossConfig) -> Callable[..., LossCallResult]:
     def loss_fn(
         logits_clean: torch.Tensor,
         logits_adv: torch.Tensor,
@@ -55,7 +56,7 @@ def _trades_closure(config: LossConfig):
     return loss_fn
 
 
-def _pgd_at_closure(config: LossConfig):
+def _pgd_at_closure(config: LossConfig) -> Callable[..., LossCallResult]:
     def loss_fn(
         logits_clean: torch.Tensor,
         logits_adv: torch.Tensor,
@@ -74,7 +75,7 @@ def _pgd_at_closure(config: LossConfig):
     return loss_fn
 
 
-def _oaat_closure(config: LossConfig):
+def _oaat_closure(config: LossConfig) -> Callable[..., LossCallResult]:
     def loss_fn(
         logits_clean: torch.Tensor,
         logits_adv: torch.Tensor,
@@ -104,7 +105,7 @@ _LOSS_BUILDERS: dict[str, Any] = {
 }
 
 
-def build_loss(config: LossConfig):
+def build_loss(config: LossConfig) -> Callable[..., LossCallResult]:
     """Return a closure (logits_clean, logits_adv, input_ids, task_mask, traj_mask) -> LossCallResult."""
     defense = config.defense.lower()
     builder = _LOSS_BUILDERS.get(defense)
