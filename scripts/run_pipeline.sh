@@ -2,17 +2,13 @@
 # End-to-end publication pipeline: gates → adv-FT → robust eval → figures.
 #
 # Default mode: dry-run — print every command without executing.
-# Pass --apply to actually run.  WARNING: training Qwen / LLaVA-7B / InternVL2-8B
-# end-to-end is multi-day H200 wall-time; consider phase/model selectors.
+# Pass --apply to actually run.  WARNING: training Qwen3-VL-8B /
+# LLaVA-OneVision-7B / InternVL3-8B end-to-end is multi-day H200 wall-time;
+# consider phase/model selectors.
 #
 # Selectors:
 #   --apply                 actually execute (default: dry-run)
-#   --models <a,b,c>        comma list (default: qwen,llava,internvl2).
-#                           `llama` alias still resolves and remains
-#                           usable IFF the running HF account has the
-#                           Meta license grant for Llama-3.2-Vision-11B.
-#                           `llava13b` alias retained for reproducibility
-#                           of past llava-only-family runs.
+#   --models <a,b,c>        comma list (default: qwen3,llava_ov,internvl3).
 #   --seeds  <i,j,...>      comma list (default: 0,1)
 #   --phases <p,q,...>      comma list of {gold,t0,t1,baseline,train,t2,t3,
 #                                          aggregate,figures,compute}
@@ -42,7 +38,7 @@ set -euo pipefail
 # also exits the pipeline script on the first error).
 
 APPLY=0
-MODELS_CSV="qwen,llava,internvl2"
+MODELS_CSV="qwen3,llava_ov,internvl3"
 SEEDS_CSV="0,1"
 # Single source of truth for valid phases. Used as the default --phases CSV,
 # echoed in the help text, and used to validate user-supplied --phases values.
@@ -111,8 +107,8 @@ unset _phase _valid _ok
 # after the operator has already left the dry-run / --apply gate behind.
 for _alias in "${MODELS[@]}"; do
   case "$_alias" in
-    qwen|llava|llava13b|llama|internvl2) ;;
-    *) echo "ERROR: unknown --models alias '$_alias' (valid: qwen|llava|llava13b|llama|internvl2)" >&2
+    qwen3|llava_ov|internvl3) ;;
+    *) echo "ERROR: unknown --models alias '$_alias' (valid: qwen3|llava_ov|internvl3)" >&2
        exit 2 ;;
   esac
 done
@@ -125,18 +121,14 @@ phase_enabled() {
 }
 
 # Map short alias → registry id (../adversarial-reasoning-attacks/configs/models.yaml).
-# Default active lineup is qwen,llava,internvl2 — three distinct LM backbones
-# (Qwen2 / Mistral / InternLM-2) and three distinct vision encoders
-# (Qwen-ViT / CLIP-ViT-L/14 / InternViT-300M) at comparable parameter counts.
-# `llama` resolves IFF the running HF account has the Meta license grant.
-# `llava13b` retained for reproducibility of past same-family-as-llava runs.
+# Active lineup: Qwen3-VL-8B, LLaVA-OneVision-7B (Qwen2 backbone), InternVL3-8B —
+# three distinct LM backbones (Qwen3 / Qwen2 / InternLM-2) and three distinct
+# vision encoders (Qwen-ViT / SigLIP-SO400M / InternViT-300M).
 model_registry_id() {
   case "$1" in
-    qwen)       echo "qwen2_5_vl_7b" ;;
-    llava)      echo "llava_v1_6_mistral_7b" ;;
-    llava13b)   echo "llava_v1_6_vicuna_13b" ;;
-    llama)      echo "llama_3_2_vision_11b" ;;
-    internvl2)  echo "internvl2_8b" ;;
+    qwen3)      echo "qwen3_vl_8b" ;;
+    llava_ov)   echo "llava_onevision_qwen2_7b" ;;
+    internvl3)  echo "internvl3_8b" ;;
     *)          echo "$1" ;;
   esac
 }
@@ -174,7 +166,7 @@ run_sh() {
 
 skip_if_exists() {
   # -s requires file exists AND is non-empty. Stub 0-byte outputs from a
-  # crashed prior run (e.g. baseline_llama/records.jsonl after a model-load
+  # crashed prior run (e.g. baseline_qwen3/records.jsonl after a model-load
   # failure) MUST force a regen — using -e would silently keep the stub.
   local out="$1"
   if [[ "$SKIP_EXISTING" -eq 1 && -s "$out" ]]; then

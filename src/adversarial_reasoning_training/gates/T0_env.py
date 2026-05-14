@@ -236,7 +236,7 @@ def _run_t0_attack(
 
 def _main() -> int:
     """CLI entrypoint:
-    ``python -m adversarial_reasoning_training.gates.T0_env --model qwen2_5_vl_7b ...``
+    ``python -m adversarial_reasoning_training.gates.T0_env --model qwen3_vl_8b ...``
     """
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 

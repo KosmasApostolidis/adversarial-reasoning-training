@@ -20,7 +20,7 @@ The script:
 
 Usage:
     python scripts/ckpt_to_hf_dir.py \\
-        --base-model qwen2_5_vl_7b \\
+        --base-model qwen3_vl_8b \\
         --ckpt runs/adv1_qwen/ckpt/weights_only.pt \\
         --out-dir runs/adv1_qwen/ckpt/hf_dir
 """

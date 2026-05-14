@@ -287,11 +287,11 @@ art-make-gold   --help
 
 Hardware: single H200 (≥ 120 GiB) per run; T0 enforces this ceiling.
 Data: ProstateX preprocessed bundle at the path declared in
-`configs/data.yaml`. Models: HF cache populated for `qwen2_5_vl_7b`,
-`llava_v1_6_mistral_7b`, `internvl2_8b`; registry in
+`configs/data.yaml`. Models: HF cache populated for `qwen3_vl_8b`,
+`llava_onevision_qwen2_7b`, `internvl3_8b`; registry in
 `../adversarial-reasoning-attacks/configs/models.yaml`.
-`llama_3_2_vision_11b` and `llava_v1_6_vicuna_13b` are also defined for
-opt-in via `--models qwen,llava,llama` or `--models qwen,llava,llava13b`.
+Opt-in via `--models qwen3,llava_ov,internvl3` (pipeline) or
+`--model <registry-id>` (individual gate/train CLIs).
 
 ### 5.1 Step 0 — Gold trajectories (one-time)
 
@@ -316,7 +316,7 @@ cd /home/medadmin/kosmasapostolidis/adversarial-reasoning-training
 
 # 0a. T0 environment gate.
 python -m adversarial_reasoning_training.gates.T0_env \
-  --model      qwen2_5_vl_7b \
+  --model      qwen3_vl_8b \
   --defenses   configs/defenses.yaml \
   --data       configs/data.yaml \
   --gold       configs/gold.yaml \
@@ -328,7 +328,7 @@ python -m adversarial_reasoning_training.gates.T0_env \
 
 # 0b. T1 clean-FT gate (no adversary, ≤200 steps).
 python -m adversarial_reasoning_training.gates.T1_clean \
-  --model              qwen2_5_vl_7b \
+  --model              qwen3_vl_8b \
   --training           configs/training.yaml \
   --data               configs/data.yaml \
   --gold               configs/gold.yaml \
@@ -347,7 +347,7 @@ art-train \
   --data         configs/data.yaml \
   --gold         configs/gold.yaml \
   --full-ft      configs/full_ft.yaml \
-  --model        qwen2_5_vl_7b \
+  --model        qwen3_vl_8b \
   --run-dir      runs/qwen_full_seed0 \
   --device       cuda \
   --seed         0 \
@@ -355,7 +355,7 @@ art-train \
 
 # 0d. T2 no-collapse gate against the resulting checkpoint.
 python -m adversarial_reasoning_training.gates.T2_no_collapse \
-  --model         qwen2_5_vl_7b \
+  --model         qwen3_vl_8b \
   --ckpt          runs/qwen_full_seed0/ckpt/best.pt \
   --t1-result     runs/t1_qwen/gates/T1.json \
   --data          configs/data.yaml \
@@ -414,7 +414,7 @@ for SEED in 0 1 2 3 4; do
     --data         configs/data.yaml \
     --gold         configs/gold.yaml \
     --full-ft      configs/full_ft.yaml \
-    --model        qwen2_5_vl_7b \
+    --model        qwen3_vl_8b \
     --run-dir      runs/qwen_main_seed${SEED} \
     --device       cuda \
     --seed         ${SEED} \
@@ -471,7 +471,7 @@ for LOSS in pgd_at oaat; do
       --data         configs/data.yaml \
       --gold         configs/gold.yaml \
       --full-ft      configs/full_ft.yaml \
-      --model        qwen2_5_vl_7b \
+      --model        qwen3_vl_8b \
       --run-dir      runs/qwen_abl_loss_${LOSS}_seed${SEED} \
       --device       cuda \
       --seed         ${SEED} \
@@ -491,7 +491,7 @@ for BETA in 0 1 12; do
       --data         configs/data.yaml \
       --gold         configs/gold.yaml \
       --full-ft      configs/full_ft.yaml \
-      --model        qwen2_5_vl_7b \
+      --model        qwen3_vl_8b \
       --run-dir      runs/qwen_abl_beta_${BETA}_seed${SEED} \
       --device       cuda \
       --seed         ${SEED} \
@@ -511,7 +511,7 @@ for FREEZE in lm_only vit_proj_frozen; do
       --data         configs/data.yaml \
       --gold         configs/gold.yaml \
       --full-ft      configs/ablations/full_ft_${FREEZE}.yaml \
-      --model        qwen2_5_vl_7b \
+      --model        qwen3_vl_8b \
       --run-dir      runs/qwen_abl_freeze_${FREEZE}_seed${SEED} \
       --device       cuda \
       --seed         ${SEED} \
@@ -530,7 +530,7 @@ for SEED in 0 1 2 3 4; do
     --data         configs/data.yaml \
     --gold         configs/gold.yaml \
     --full-ft      configs/full_ft.yaml \
-    --model        qwen2_5_vl_7b \
+    --model        qwen3_vl_8b \
     --run-dir      runs/qwen_abl_eps_fixed_seed${SEED} \
     --device       cuda \
     --seed         ${SEED} \
@@ -554,7 +554,7 @@ for SEED in 0 1 2 3 4; do
     --data         configs/data.yaml \
     --gold         configs/gold.yaml \
     --full-ft      configs/full_ft.yaml \
-    --model        llava_v1_6_mistral_7b \
+    --model        llava_onevision_qwen2_7b \
     --run-dir      runs/llava_main_seed${SEED} \
     --device       cuda \
     --seed         ${SEED} \
@@ -570,7 +570,7 @@ for LOSS in trades pgd_at oaat; do
       --data         configs/data.yaml \
       --gold         configs/gold.yaml \
       --full-ft      configs/full_ft.yaml \
-      --model        llava_v1_6_mistral_7b \
+      --model        llava_onevision_qwen2_7b \
       --run-dir      runs/llava_abl_loss_${LOSS}_seed${SEED} \
       --device       cuda \
       --seed         ${SEED} \
@@ -584,7 +584,7 @@ done
 
 ### 5.6 Phase 4 — InternVL2-8B replication
 
-Same shape as Phase 3, swap `--model internvl2_8b`. Expect comparable
+Same shape as Phase 3, swap `--model internvl3_8b`. Expect comparable
 wall-time per run to the 7B llava (8B InternLM-2 LM backbone +
 InternViT-300M vision encoder). Document any bf16-only / batch-size /
 tile-budget (`max_tiles`) deviations in the paper appendix.
@@ -597,13 +597,13 @@ for SEED in 0 1 2 3 4; do
     --data         configs/data.yaml \
     --gold         configs/gold.yaml \
     --full-ft      configs/full_ft.yaml \
-    --model        internvl2_8b \
+    --model        internvl3_8b \
     --run-dir      runs/internvl2_main_seed${SEED} \
     --device       cuda \
     --seed         ${SEED} \
     --models-yaml  ../adversarial-reasoning-attacks/configs/models.yaml
 done
-# Loss-family ablation block identical to Phase 3, --model swapped to internvl2_8b.
+# Loss-family ablation block identical to Phase 3, --model swapped to internvl3_8b.
 ```
 
 ### 5.7 Phase 5 — Paper artifacts (no training)

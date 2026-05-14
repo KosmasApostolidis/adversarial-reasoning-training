@@ -134,7 +134,12 @@ def assemble(
     # Deferred import: templates imports TeacherForcedBatch from this module,
     # so a top-level import would create a cycle. Late binding keeps the
     # module-load graph acyclic.
-    from .templates import assemble_internvl, assemble_llava_next, assemble_qwen
+    from .templates import (
+        assemble_internvl,
+        assemble_llava_next,
+        assemble_llava_onevision,
+        assemble_qwen,
+    )
 
     # Centralised dispatch — keeps the canonical family-name set in one
     # place so callers get a clear ``ValueError`` listing valid options on
@@ -144,6 +149,7 @@ def assemble(
     dispatch = {
         VLMFamily.QWEN_VL.value: assemble_qwen,
         VLMFamily.LLAVA_NEXT.value: assemble_llava_next,
+        VLMFamily.LLAVA_ONEVISION.value: assemble_llava_onevision,
         VLMFamily.INTERNVL2.value: assemble_internvl,
     }
     fn = dispatch.get(family)
