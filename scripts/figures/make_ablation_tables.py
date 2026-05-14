@@ -23,10 +23,10 @@ from typing import Any
 REPORT_METRICS = (
     ("T2.tool_name_acc", "Tool acc (clean)"),
     ("T2.answer_em", "Answer EM (clean)"),
-    ("T3.tool_name_acc_delta", "Δ Tool acc"),
-    ("T3.args_iou_delta", "Δ Args IoU"),
-    ("T3.answer_em_delta", "Δ Answer EM"),
-    ("T3.traj_edit_distance_delta", "Δ Traj edit dist"),
+    ("T3.tool_name_acc_delta_mean", "Δ Tool acc"),
+    ("T3.args_iou_delta_mean", "Δ Args IoU"),
+    ("T3.answer_em_delta_mean", "Δ Answer EM"),
+    ("T3.traj_edit_distance_delta_mean", "Δ Traj edit dist"),
 )
 
 

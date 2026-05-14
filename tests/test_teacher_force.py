@@ -196,7 +196,7 @@ def test_assemble_internvl2_smoke() -> None:
     image = Image.new("RGB", (448, 448), color="white")
     traj = Trajectory(
         task_id="t0",
-        model_id="internvl2_8b",
+        model_id="internvl3_8b",
         seed=0,
         tool_calls=[
             ToolCall(step=0, name="zoom", args={"x": 1}, result="ok"),

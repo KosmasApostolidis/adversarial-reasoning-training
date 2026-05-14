@@ -4,7 +4,7 @@ Usage:
     art-train --config configs/training.yaml \\
         --defenses configs/defenses.yaml --data configs/data.yaml \\
         --gold configs/gold.yaml --full-ft configs/full_ft.yaml \\
-        --model qwen2_5_vl_7b --run-dir runs/<id>
+        --model qwen3_vl_8b --run-dir runs/<id>
 
 Loads all YAMLs, constructs the attacks-repo VLM + trainer-repo
 trainer, and runs ``AdvTrainer.fit``. Everything config-driven; no

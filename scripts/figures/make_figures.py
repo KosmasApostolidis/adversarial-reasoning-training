@@ -23,6 +23,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.patches import Patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -36,10 +37,17 @@ PLT_RC = {
 }
 
 HEADLINE_METRICS = (
-    ("T3.tool_name_acc_delta", "Δ Tool acc"),
-    ("T3.args_iou_delta", "Δ Args IoU"),
-    ("T3.answer_em_delta", "Δ Answer EM"),
-    ("T3.traj_edit_distance_delta", "Δ Traj edit dist"),
+    ("T3.tool_name_acc_delta_mean", "Δ Tool acc"),
+    ("T3.args_iou_delta_mean", "Δ Args IoU"),
+    ("T3.answer_em_delta_mean", "Δ Answer EM"),
+    ("T3.traj_edit_distance_delta_mean", "Δ Traj edit dist"),
+)
+
+COMPARISON_METRICS = (
+    ("T3.tool_name_acc", "Tool acc"),
+    ("T3.args_iou", "Args IoU"),
+    ("T3.answer_em", "Answer EM"),
+    ("T3.traj_edit_distance", "Traj edit dist"),
 )
 
 
@@ -267,6 +275,106 @@ def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
     return 0
 
 
+def render_baseline_vs_defended(aggregates: list[Path], out_path: Path) -> int:
+    """Side-by-side baseline vs defended bars, one subplot per T3 metric."""
+    if not aggregates:
+        print("ERROR: --compare requires at least one path", file=sys.stderr)
+        return 1
+    payloads: list[tuple[str, dict]] = []
+    for path in aggregates:
+        if not path.exists():
+            print(f"WARN: missing aggregate (skipping): {path}", file=sys.stderr)
+            continue
+        agg = load_json_lenient(path)
+        if agg is None:
+            continue
+        label = path.parent.name
+        if label.endswith("_main"):
+            label = label[:-5]
+        payloads.append((label, agg))
+    if not payloads:
+        print("ERROR: no aggregates available for comparison", file=sys.stderr)
+        return 1
+
+    metric_keys = [k for k, _ in COMPARISON_METRICS]
+    metric_labels = [lab for _, lab in COMPARISON_METRICS]
+    palette = {"baseline": "#6c757d", "defended": "#198754"}
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+    for mi, (ax, key, mlab) in enumerate(zip(axes.flat, metric_keys, metric_labels)):
+        models_with_data: list[tuple[str, float, float, float, float]] = []
+        for label, agg in payloads:
+            summary = agg.get("summary", {})
+            bl_key = f"{key}_baseline_mean"
+            df_key = f"{key}_defended_mean"
+            bl_row = summary.get(bl_key)
+            df_row = summary.get(df_key)
+            if not bl_row or not df_row:
+                continue
+            bl_mean = float(bl_row.get("mean", float("nan")))
+            df_mean = float(df_row.get("mean", float("nan")))
+            bl_ci_lo = float(bl_row.get("ci_lo", float("nan")))
+            bl_ci_hi = float(bl_row.get("ci_hi", float("nan")))
+            df_ci_lo = float(df_row.get("ci_lo", float("nan")))
+            df_ci_hi = float(df_row.get("ci_hi", float("nan")))
+            if math.isnan(bl_mean) or math.isnan(df_mean):
+                continue
+            models_with_data.append((
+                label, bl_mean, df_mean,
+                max(0.0, bl_mean - bl_ci_lo) if not math.isnan(bl_ci_lo) else 0.0,
+                max(0.0, bl_ci_hi - bl_mean) if not math.isnan(bl_ci_hi) else 0.0,
+                max(0.0, df_mean - df_ci_lo) if not math.isnan(df_ci_lo) else 0.0,
+                max(0.0, df_ci_hi - df_mean) if not math.isnan(df_ci_hi) else 0.0,
+            ))
+
+        if not models_with_data:
+            ax.text(0.5, 0.5, "No T3 data", ha="center", va="center",
+                    transform=ax.transAxes, color="gray")
+            ax.set_title(mlab)
+            continue
+
+        n = len(models_with_data)
+        x = list(range(n))
+        bar_w = 0.35
+        for offset, cond, color in [(-bar_w / 2, 1, palette["baseline"]),
+                                      (bar_w / 2, 2, palette["defended"])]:
+            means = [m[cond] for m in models_with_data]
+            lo_err = [m[3] if cond == 1 else m[5] for m in models_with_data]
+            hi_err = [m[4] if cond == 1 else m[6] for m in models_with_data]
+            ax.bar(
+                [xi + offset for xi in x], means,
+                width=bar_w,
+                yerr=[lo_err, hi_err],
+                capsize=3,
+                color=color,
+                alpha=0.85,
+            )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels([m[0] for m in models_with_data])
+        ax.set_ylabel("score")
+        ax.set_ylim(0, 1.15)
+        ax.set_title(mlab)
+
+    # Shared legend
+    handles = [
+        Patch(facecolor=palette["baseline"], alpha=0.85, label="baseline"),
+        Patch(facecolor=palette["defended"], alpha=0.85, label="defended"),
+    ]
+    fig.legend(handles=handles, loc="lower center", ncol=2, frameon=False, fontsize=9)
+
+    fig.suptitle(
+        "Adversarially trained vs baseline — per-model per-metric comparison",
+        y=1.01, fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout(rect=[0, 0.08, 1, 0.96])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {out_path}  ({len(payloads)} model(s), {len(metric_keys)} metrics)")
+    return 0
+
+
 def _bootstrap_ci(
     samples: list[float],
     *,
@@ -363,8 +471,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="aggregate.json file(s) → render headline 3-model figure to --out.",
     )
     p.add_argument(
+        "--compare", type=Path, nargs="+", default=None,
+        help="aggregate.json file(s) → render baseline-vs-defended comparison to --out.",
+    )
+    p.add_argument(
         "--out", type=Path, default=None,
-        help="Headline figure output PNG (required with --aggregate).",
+        help="Figure output PNG (required with --aggregate or --compare).",
     )
     p.add_argument(
         "--runs-dir", type=Path, default=ROOT / "runs",
@@ -380,6 +492,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     plt.rcParams.update(PLT_RC)
+    if args.compare:
+        if args.out is None:
+            print("ERROR: --compare requires --out", file=sys.stderr)
+            return 2
+        return render_baseline_vs_defended(args.compare, args.out)
     if args.aggregate:
         if args.out is None:
             print("ERROR: --aggregate requires --out", file=sys.stderr)

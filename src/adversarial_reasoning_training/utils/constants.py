@@ -58,6 +58,7 @@ class VLMFamily(str, Enum):
 
     QWEN_VL = "qwen_vl"
     LLAVA_NEXT = "llava_next"
+    LLAVA_ONEVISION = "llava_onevision"
     INTERNVL2 = "internvl2"
 
 

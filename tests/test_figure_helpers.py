@@ -250,7 +250,7 @@ def test_compute_summary_prefers_gate_schema_when_both_present(
 def _seed_aggregate_payload(delta: float) -> dict[str, Any]:
     return {
         "summary": {
-            f"T3.{m}_delta": {
+            f"T3.{m}_delta_mean": {
                 "n": 3, "mean": delta, "std": 0.05,
                 "ci_lo": delta - 0.06, "ci_hi": delta + 0.06,
             }

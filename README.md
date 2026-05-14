@@ -1,6 +1,6 @@
 # adversarial-reasoning-training
 
-Fine-tune medical-imaging VLM agents (Qwen2.5-VL-7B, LLaVA-v1.6-Mistral-7B) so their ReAct reasoning trajectories — tool selection, tool args, intermediate evidence, final diagnosis — stay robust under white-box PGD-L∞ pixel perturbations on prostate-MRI tasks.
+Fine-tune medical-imaging VLM agents (Qwen3-VL-8B, LLaVA-OneVision-7B, InternVL3-8B) so their ReAct reasoning trajectories — tool selection, tool args, intermediate evidence, final diagnosis — stay robust under white-box PGD-L∞ pixel perturbations on prostate-MRI tasks.
 
 Sibling project to [adversarial-reasoning-attacks](../adversarial-reasoning-attacks) which provides the measurement tooling (VLM loaders, ReAct agent, PGD attack, trajectory metrics). This repo adds the training loop.
 
@@ -31,10 +31,10 @@ pip install -e .[flash]
 python scripts/make_gold_trajectories.py --config configs/gold.yaml
 
 # 2. Gate T0 — env sanity + mem probe
-python -m adversarial_reasoning_training.gates.T0_env --model qwen2_5_vl_7b
+python -m adversarial_reasoning_training.gates.T0_env --model qwen3_vl_8b
 
-# 3. Full adversarial training on Qwen
-python scripts/train.py --config configs/training.yaml --model qwen2_5_vl_7b
+# 3. Full adversarial training on Qwen3
+art-train --config configs/training.yaml --model qwen3_vl_8b
 
 # 4. Robust eval vs undefended baseline (uses attacks repo runner)
 python scripts/eval_robust.py --ckpt runs/<timestamp>/final/ckpt.pt
@@ -66,7 +66,7 @@ src/adversarial_reasoning_training/
 
 ## Status
 
-Alpha. Plan: Qwen2.5-VL-7B first, LLaVA-v1.6 after Qwen green.
+Alpha. Three-model lineup: Qwen3-VL-8B, LLaVA-OneVision-7B, InternVL3-8B. Full pipeline via `scripts/run_pipeline.sh`.
 
 ## License
 

@@ -259,7 +259,7 @@ def _main() -> int:
     """CLI entrypoint:
 
     ``python -m adversarial_reasoning_training.gates.T1_clean
-        --model qwen2_5_vl_7b
+        --model qwen3_vl_8b
         --max-steps 200
         --out runs/t1/gates/T1.json``
     """

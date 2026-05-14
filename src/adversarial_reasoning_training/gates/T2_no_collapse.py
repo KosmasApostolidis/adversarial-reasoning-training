@@ -148,7 +148,7 @@ def _main() -> int:
     """CLI entrypoint:
 
     ``python -m adversarial_reasoning_training.gates.T2_no_collapse
-        --model qwen2_5_vl_7b
+        --model qwen3_vl_8b
         --ckpt runs/adv1_qwen/ckpt/best.pt
         --t1-result runs/t1_v2/gates/T1.json
         --tolerance-pp 5.0
