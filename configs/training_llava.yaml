@@ -1,0 +1,9 @@
+# LLaVA-specific training override.
+# LLaVA-NeXT/Mistral-7B degrades under pure PGD-AT — OAAT (50% clean + 50% adv)
+# preserves task performance while maintaining adversarial robustness.
+#
+# See: configs/training.yaml for the shared base.
+
+_extends: training.yaml
+
+defense: oaat

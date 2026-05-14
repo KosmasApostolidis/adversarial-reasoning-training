@@ -133,27 +133,12 @@ def run_t0(
     reset_peak_memory()
     notes: list[str] = []
 
-    sample = sample_factory()
-    batch = collator([sample]).to(device_t)
-    loss_fn = build_loss(from_cfg_dict(defense_cfg))
-
     model.train(False)
-    inner_cfg = InnerPgdConfig(
-        epsilon=epsilon,
-        alpha_ratio=DEFAULT_PGD_ALPHA_RATIO,
-        steps=pgd_steps,
-        random_restarts=1,
+    batch, x_adv, loss_fn = _run_t0_attack(
+        vlm, sample_factory, collator, defense_cfg,
+        device_t, epsilon, pgd_steps,
     )
-    pixel_values = batch.forward_kwargs["pixel_values"].to(device_t)
-    attack_result = run_inner_pgd(vlm, pixel_values, batch, inner_cfg)
-    x_adv = attack_result.perturbed_image.detach().to(device_t)
-    if x_adv.ndim == 3:
-        x_adv = x_adv.unsqueeze(0)
 
-    # Keep model in eval mode: attacks-repo qwen_vl.forward_with_logits
-    # asserts ``self.model.training is False``. Grads still flow under
-    # eval mode (dropout/BN stay frozen); this matches adv_trainer's
-    # outer step which never re-enables train mode after inner PGD.
     for p in model.parameters():
         if p.grad is not None:
             p.grad = None
@@ -163,6 +148,7 @@ def run_t0(
             k: v for k, v in batch.forward_kwargs.items()
             if k != "pixel_values" and v is not None
         }
+        pixel_values = batch.forward_kwargs["pixel_values"].to(device_t)
         logits_clean = vlm.forward_with_logits(pixel_values, batch.input_ids, **fwd_kwargs)
         logits_adv = vlm.forward_with_logits(x_adv, batch.input_ids, **fwd_kwargs)
         loss_out = loss_fn(
@@ -199,13 +185,9 @@ def run_t0(
     return result
 
 
-def _main() -> int:
-    """CLI entrypoint:
-    ``python -m adversarial_reasoning_training.gates.T0_env --model qwen2_5_vl_7b ...``
-    """
+def _build_t0_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for the T0 gate."""
     import argparse
-
-    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
@@ -221,6 +203,44 @@ def _main() -> int:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--epsilon", type=float, default=EPS_4_255)
     parser.add_argument("--pgd-steps", type=int, default=3)
+    return parser
+
+
+def _run_t0_attack(
+    vlm: Any,
+    sample_factory: Callable[[], Any],
+    collator: TFCollator,
+    defense_cfg: dict[str, Any],
+    device: torch.device,
+    epsilon: float,
+    pgd_steps: int,
+) -> tuple[Any, torch.Tensor, LossOutput]:
+    """Create sample, run inner PGD, return (batch, adversarial image, loss_fn)."""
+    sample = sample_factory()
+    batch = collator([sample]).to(device)
+    loss_fn = build_loss(from_cfg_dict(defense_cfg))
+
+    inner_cfg = InnerPgdConfig(
+        epsilon=epsilon,
+        alpha_ratio=DEFAULT_PGD_ALPHA_RATIO,
+        steps=pgd_steps,
+        random_restarts=1,
+    )
+    pixel_values = batch.forward_kwargs["pixel_values"].to(device)
+    attack_result = run_inner_pgd(vlm, pixel_values, batch, inner_cfg)
+    x_adv = attack_result.perturbed_image.detach().to(device)
+    if x_adv.ndim == 3:
+        x_adv = x_adv.unsqueeze(0)
+    return batch, x_adv, loss_fn
+
+
+def _main() -> int:
+    """CLI entrypoint:
+    ``python -m adversarial_reasoning_training.gates.T0_env --model qwen2_5_vl_7b ...``
+    """
+    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
+
+    parser = _build_t0_parser()
     args = parser.parse_args()
 
     defense_cfg = load_gate_yaml(args.defenses, allow_empty=False)

@@ -112,27 +112,18 @@ def _bh_fdr(pvalues: list[float], alpha: float) -> list[bool]:
     return rejected
 
 
-def run_t3(
-    *,
+def _compute_metric_deltas(
     baseline_per_sample: dict[str, list[float]],
     defended_per_sample: dict[str, list[float]],
-    out_path: Path,
-    thresholds: T3Thresholds = T3Thresholds(),
-    dropped_metrics: list[str] | None = None,
-) -> T3Result:
-    """Compare two per-sample metric dicts under BH-FDR.
-
-    Each metric must map to a list of floats of the same length across
-    baseline and defended, one entry per eval sample.
-    """
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    start = time.time()
+    metrics: tuple[str, ...],
+) -> tuple[dict[str, dict[str, float]], list[float], list[str], list[str]]:
+    """Compute per-metric stats, p-values, and collect skip notes."""
     per_metric: dict[str, dict[str, float]] = {}
     pvalues: list[float] = []
     metric_keys: list[str] = []
     notes: list[str] = []
 
-    for key in thresholds.metrics:
+    for key in metrics:
         baseline_samples = baseline_per_sample.get(key, [])
         defended_samples = defended_per_sample.get(key, [])
         if (
@@ -157,6 +148,29 @@ def run_t3(
         }
         pvalues.append(p)
         metric_keys.append(key)
+    return per_metric, pvalues, metric_keys, notes
+
+
+def run_t3(
+    *,
+    baseline_per_sample: dict[str, list[float]],
+    defended_per_sample: dict[str, list[float]],
+    out_path: Path,
+    thresholds: T3Thresholds = T3Thresholds(),
+    dropped_metrics: list[str] | None = None,
+) -> T3Result:
+    """Compare two per-sample metric dicts under BH-FDR.
+
+    Each metric must map to a list of floats of the same length across
+    baseline and defended, one entry per eval sample.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    start = time.time()
+
+    per_metric, pvalues, metric_keys, pre_notes = _compute_metric_deltas(
+        baseline_per_sample, defended_per_sample, thresholds.metrics,
+    )
+    notes: list[str] = list(pre_notes)
 
     rejected = _bh_fdr(pvalues, thresholds.alpha)
     for key, rej in zip(metric_keys, rejected, strict=False):

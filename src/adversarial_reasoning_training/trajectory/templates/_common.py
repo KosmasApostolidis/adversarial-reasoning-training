@@ -12,15 +12,5 @@ markers in :mod:`._llava_next`.
 
 from __future__ import annotations
 
-import json
-
-from adversarial_reasoning.agents.base import ToolCall
-
 IM_START = "<|im_start|>"
 IM_END = "<|im_end|>"
-
-
-def format_tool_call_json(call: ToolCall) -> str:
-    """Serialize a ToolCall into a `<tool_call>` JSON body (Qwen-style)."""
-    payload = {"name": call.name, "arguments": call.args}
-    return json.dumps(payload, ensure_ascii=False, separators=(", ", ": "))

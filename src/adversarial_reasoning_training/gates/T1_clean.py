@@ -97,29 +97,14 @@ def run_t1(
     micro = 0
     loss_final = float("nan")
 
-    # 200 outer steps × grad_accum 8 = 1600 micro-batches; train_ds has 55
-    # samples, so we cycle the loader across epochs until step hits max_steps.
     while step < thresholds.max_steps:
         for batch in loader:
             if step >= thresholds.max_steps:
                 break
-            batch = batch.to(device_t)
-            with torch.autocast(device_type=device_t.type, dtype=amp_dtype):
-                logits = _clean_forward(vlm, batch, device_t)
-                loss = task_ce(logits, batch.input_ids, batch.task_mask)
-
-            (loss / grad_accum).backward()
-            micro += 1
-            if micro % grad_accum == 0:
-                torch.nn.utils.clip_grad_norm_(
-                    (p for p in model.parameters() if p.requires_grad), max_norm=1.0,
-                )
-                optimizer.step()
-                if scheduler is not None:
-                    scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-                step += 1
-                loss_final = float(loss.detach())
+            step, micro, loss_final = _t1_train_step(
+                vlm, batch, model, optimizer, scheduler,
+                device_t, amp_dtype, grad_accum, step, micro,
+            )
 
     metrics = evaluator(step, 1) or {}
     tool_acc = float(metrics.get(tool_name_metric, 0.0))
@@ -212,25 +197,9 @@ def make_teacher_forced_evaluator(
     return _evaluate
 
 
-def _main() -> int:
-    """CLI entrypoint:
-
-    ``python -m adversarial_reasoning_training.gates.T1_clean
-        --model qwen2_5_vl_7b
-        --max-steps 200
-        --out runs/t1/gates/T1.json``
-    """
+def _build_t1_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for the T1 gate."""
     import argparse
-
-    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
-
-    from ..trainer.freeze import FreezeConfig, apply_freeze
-    from ..trainer.optim import (
-        OptimConfig,
-        ScheduleConfig,
-        build_optimizer,
-        build_scheduler,
-    )
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
@@ -249,6 +218,62 @@ def _main() -> int:
     parser.add_argument("--grad-accum", type=int, default=GRAD_ACCUM_DEFAULT)
     parser.add_argument("--tool-name-acc-min", type=float, default=defaults.tool_name_acc_min)
     parser.add_argument("--answer-em-min", type=float, default=defaults.answer_em_min)
+    return parser
+
+
+def _t1_train_step(
+    vlm: Any,
+    batch: Any,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler | None,
+    device: torch.device,
+    amp_dtype: torch.dtype,
+    grad_accum: int,
+    step: int,
+    micro: int,
+) -> tuple[int, int, float]:
+    """Run one training micro-batch: forward, backward, step on accumulation boundary."""
+    batch = batch.to(device)
+    with torch.autocast(device_type=device.type, dtype=amp_dtype):
+        logits = _clean_forward(vlm, batch, device)
+        loss = task_ce(logits, batch.input_ids, batch.task_mask)
+
+    (loss / grad_accum).backward()
+    micro += 1
+    loss_val = float("nan")
+    if micro % grad_accum == 0:
+        torch.nn.utils.clip_grad_norm_(
+            (p for p in model.parameters() if p.requires_grad), max_norm=1.0,
+        )
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        optimizer.zero_grad(set_to_none=True)
+        step += 1
+        loss_val = float(loss.detach())
+    return step, micro, loss_val
+
+
+def _main() -> int:
+    """CLI entrypoint:
+
+    ``python -m adversarial_reasoning_training.gates.T1_clean
+        --model qwen2_5_vl_7b
+        --max-steps 200
+        --out runs/t1/gates/T1.json``
+    """
+    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
+
+    from ..trainer.freeze import FreezeConfig, apply_freeze
+    from ..trainer.optim import (
+        OptimConfig,
+        ScheduleConfig,
+        build_optimizer,
+        build_scheduler,
+    )
+
+    parser = _build_t1_parser()
     args = parser.parse_args()
 
     data_cfg = load_gate_yaml(args.data)
