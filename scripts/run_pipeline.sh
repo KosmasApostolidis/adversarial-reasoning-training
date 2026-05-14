@@ -582,8 +582,10 @@ run_one_seed() {
     if [[ "$SKIP_EXISTING" -eq 1 && -n "$CKPT" ]]; then
       echo "SKIP (trained): $CKPT"
     else
+      local TRAIN_CFG="configs/training.yaml"
+      [[ -f "configs/training_${ALIAS}.yaml" ]] && TRAIN_CFG="configs/training_${ALIAS}.yaml"
       run art-train \
-        --config       configs/training.yaml \
+        --config       "$TRAIN_CFG" \
         --defenses     configs/defenses.yaml \
         --data         configs/data.yaml \
         --gold         configs/gold.yaml \
