@@ -115,28 +115,9 @@ def run_t2(
     return result
 
 
-def _main() -> int:
-    """CLI entrypoint:
-
-    ``python -m adversarial_reasoning_training.gates.T2_no_collapse
-        --model qwen2_5_vl_7b
-        --ckpt runs/adv1_qwen/ckpt/best.pt
-        --t1-result runs/t1_v2/gates/T1.json
-        --tolerance-pp 5.0
-        --out runs/adv1_qwen/gates/T2.json``
-
-    Loads the adversarially-FT checkpoint, runs the same teacher-forced
-    proxy evaluator from T1 on the dev split, and gates clean-input
-    metrics against the T1 ceiling within ``--tolerance-pp`` percentage
-    points.
-    """
+def _build_t2_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser for the T2 gate."""
     import argparse
-
-    import torch
-    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
-
-    from ..trainer.ckpt import load_checkpoint
-    from .T1_clean import make_teacher_forced_evaluator
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
@@ -160,6 +141,31 @@ def _main() -> int:
         help="subset of T1 metrics to gate; args_iou skipped by default since "
              "the teacher-forced proxy does not emit it",
     )
+    return parser
+
+
+def _main() -> int:
+    """CLI entrypoint:
+
+    ``python -m adversarial_reasoning_training.gates.T2_no_collapse
+        --model qwen2_5_vl_7b
+        --ckpt runs/adv1_qwen/ckpt/best.pt
+        --t1-result runs/t1_v2/gates/T1.json
+        --tolerance-pp 5.0
+        --out runs/adv1_qwen/gates/T2.json``
+
+    Loads the adversarially-FT checkpoint, runs the same teacher-forced
+    proxy evaluator from T1 on the dev split, and gates clean-input
+    metrics against the T1 ceiling within ``--tolerance-pp`` percentage
+    points.
+    """
+    import torch
+    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
+
+    from ..trainer.ckpt import load_checkpoint
+    from .T1_clean import make_teacher_forced_evaluator
+
+    parser = _build_t2_parser()
     args = parser.parse_args()
 
     data_cfg = load_gate_yaml(args.data)
