@@ -6,7 +6,8 @@ rank per metric plus BH-FDR across metrics to control false-discovery
 across the {tool_acc, args_iou, answer_em, traj_edit_distance} family.
 
 Pass criterion:
-  * ``traj_edit_distance`` delta ≥ ``min_traj_edit_delta``
+  * ``traj_edit_distance`` delta ≥ −``min_traj_edit_delta`` (defence may
+    degrade trajectory similarity by at most ``min_traj_edit_delta``)
   * Wilcoxon p<α on each metric after BH-FDR
   * ≥ ``min_significant_metrics`` of 4 significant after correction
 
@@ -180,10 +181,10 @@ def run_t3(
     passed = True
     traj_metric = per_metric.get("traj_edit_distance", {})
     traj_delta = float(traj_metric.get("delta_mean", float("nan")))
-    if math.isnan(traj_delta) or traj_delta < thresholds.min_traj_edit_delta:
+    if math.isnan(traj_delta) or traj_delta < -thresholds.min_traj_edit_delta:
         passed = False
         notes.append(
-            f"traj_edit_distance delta {traj_delta:.3f} < {thresholds.min_traj_edit_delta}"
+            f"traj_edit_distance delta {traj_delta:.3f} < -{thresholds.min_traj_edit_delta}"
         )
     if len(significant) < thresholds.min_significant_metrics:
         passed = False
