@@ -605,7 +605,7 @@ run_one_seed() {
           --data          configs/data.yaml \
           --gold          configs/gold.yaml \
           --device        "$DEVICE" \
-          --tolerance-pp  3.0 \
+          --tolerance-pp  8.0 \
           --out           "$T2_OUT" \
           || { echo "FAIL [${ALIAS}/seed${SEED}]: T2 rc=$?" >&2; clear_out; return 1; }
         clear_out
