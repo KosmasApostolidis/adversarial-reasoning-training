@@ -144,6 +144,32 @@ def _build_t2_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_t2_model_and_ckpt(args: Any) -> tuple[Any, Any]:
+    """Load the VLM in bf16 and (optionally) restore an adversarial checkpoint."""
+    import torch
+    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
+
+    from ..trainer.ckpt import load_checkpoint
+
+    vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
+    model = vlm.model
+    model.to(torch.bfloat16)
+    if args.ckpt is not None:
+        load_checkpoint(args.ckpt, model, optimizer=None, map_location=args.device)
+    return vlm, model
+
+
+def _build_t2_dev_dataset(args: Any, data_cfg: dict, gold_cfg: dict) -> Any:
+    """Build the dev split, honouring the optional --max-eval-samples cap."""
+    n_dev = args.max_eval_samples or data_cfg.get("n_dev")
+    return build_train_dataset(
+        data_cfg,
+        gold_cfg,
+        split=data_cfg.get("dev_split", "dev"),
+        n=n_dev,
+    )
+
+
 def _main() -> int:
     """CLI entrypoint:
 
@@ -160,33 +186,18 @@ def _main() -> int:
     points.
     """
     import torch
-    from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
-    from ..trainer.ckpt import load_checkpoint
     from .T1_clean import make_teacher_forced_evaluator
 
-    parser = _build_t2_parser()
-    args = parser.parse_args()
+    args = _build_t2_parser().parse_args()
 
     data_cfg = load_gate_yaml(args.data)
     gold_cfg = load_gate_yaml(args.gold)
 
-    vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
-    model = vlm.model
-    model.to(torch.bfloat16)
-
-    if args.ckpt is not None:
-        load_checkpoint(args.ckpt, model, optimizer=None, map_location=args.device)
+    vlm, model = _load_t2_model_and_ckpt(args)
+    dev_ds = _build_t2_dev_dataset(args, data_cfg, gold_cfg)
 
     collator = get_collator(vlm)
-    n_dev = args.max_eval_samples or data_cfg.get("n_dev")
-    dev_ds = build_train_dataset(
-        data_cfg,
-        gold_cfg,
-        split=data_cfg.get("dev_split", "dev"),
-        n=n_dev,
-    )
-
     device_t = torch.device(args.device)
     eval_fn = make_teacher_forced_evaluator(
         vlm=vlm, model=model, dev_ds=dev_ds, collator=collator, device=device_t,
