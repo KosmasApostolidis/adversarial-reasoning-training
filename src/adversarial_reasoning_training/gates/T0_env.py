@@ -107,6 +107,64 @@ def _evaluate_t0_verdict(
     return passed, notes
 
 
+def _build_t0_result(
+    *,
+    passed: bool,
+    loss_out: Any,
+    grad_norms: Any,
+    peak_gb: float,
+    peak_memory_limit_gb: float,
+    duration_s: float,
+    notes: list[str],
+) -> T0Result:
+    """Assemble the T0Result record from the gathered metrics."""
+    return T0Result(
+        passed=passed,
+        loss_clean=float(loss_out.components.get("loss_task", float("nan"))),
+        loss_total=float(loss_out.total.detach()),
+        grad_norm_vit=grad_norms.vit,
+        grad_norm_projector=grad_norms.projector,
+        grad_norm_lm=grad_norms.lm,
+        peak_memory_gb=peak_gb,
+        peak_memory_limit_gb=peak_memory_limit_gb,
+        duration_s=duration_s,
+        notes=notes,
+    )
+
+
+def _t0_forward_backward(
+    vlm: Any,
+    model: torch.nn.Module,
+    batch: Any,
+    x_adv: torch.Tensor,
+    loss_fn: Callable[..., Any],
+    device: torch.device,
+    amp_dtype: torch.dtype,
+) -> Any:
+    """Zero grads, run clean+adv forward under autocast, compute loss, backward.
+
+    Returns the ``LossOutput`` so the caller can read ``.total`` and
+    ``.components`` for the result record.
+    """
+    for p in model.parameters():
+        if p.grad is not None:
+            p.grad = None
+    with torch.autocast(device_type=device.type, dtype=amp_dtype):
+        fwd_kwargs = {
+            k: v for k, v in batch.forward_kwargs.items()
+            if k != "pixel_values" and v is not None
+        }
+        pixel_values = batch.forward_kwargs["pixel_values"].to(device)
+        logits_clean = vlm.forward_with_logits(pixel_values, batch.input_ids, **fwd_kwargs)
+        logits_adv = vlm.forward_with_logits(x_adv, batch.input_ids, **fwd_kwargs)
+        loss_out = loss_fn(
+            logits_clean, logits_adv,
+            batch.input_ids, batch.task_mask, batch.traj_mask,
+        )
+    loss_out.total.backward()
+    return loss_out
+
+
 def run_t0(
     *,
     vlm: Any,
@@ -138,25 +196,9 @@ def run_t0(
         vlm, sample_factory, collator, defense_cfg,
         device_t, epsilon, pgd_steps,
     )
-
-    for p in model.parameters():
-        if p.grad is not None:
-            p.grad = None
-
-    with torch.autocast(device_type=device_t.type, dtype=amp_dtype):
-        fwd_kwargs = {
-            k: v for k, v in batch.forward_kwargs.items()
-            if k != "pixel_values" and v is not None
-        }
-        pixel_values = batch.forward_kwargs["pixel_values"].to(device_t)
-        logits_clean = vlm.forward_with_logits(pixel_values, batch.input_ids, **fwd_kwargs)
-        logits_adv = vlm.forward_with_logits(x_adv, batch.input_ids, **fwd_kwargs)
-        loss_out = loss_fn(
-            logits_clean, logits_adv,
-            batch.input_ids, batch.task_mask, batch.traj_mask,
-        )
-
-    loss_out.total.backward()
+    loss_out = _t0_forward_backward(
+        vlm, model, batch, x_adv, loss_fn, device_t, amp_dtype,
+    )
 
     grad_norms = _collect_role_grad_norms(model)
     peak_gb = current_memory_stats().peak_allocated_gb
@@ -169,14 +211,11 @@ def run_t0(
     )
     notes.extend(verdict_notes)
 
-    result = T0Result(
+    result = _build_t0_result(
         passed=passed,
-        loss_clean=float(loss_out.components.get("loss_task", float("nan"))),
-        loss_total=float(loss_out.total.detach()),
-        grad_norm_vit=grad_norms.vit,
-        grad_norm_projector=grad_norms.projector,
-        grad_norm_lm=grad_norms.lm,
-        peak_memory_gb=peak_gb,
+        loss_out=loss_out,
+        grad_norms=grad_norms,
+        peak_gb=peak_gb,
         peak_memory_limit_gb=peak_memory_limit_gb,
         duration_s=time.time() - start,
         notes=notes,
