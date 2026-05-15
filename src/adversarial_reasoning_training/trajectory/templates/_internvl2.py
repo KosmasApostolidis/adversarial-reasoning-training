@@ -103,6 +103,46 @@ def _emit_internvl_assistant_step(
     segments.append(Segment("}", SegmentKind.SEPARATOR))
 
 
+def _append_internvl_system(segments: list[Segment], sys_text: str) -> None:
+    """Append the system turn prefacing every InternVL2 conversation."""
+    segments.append(Segment(f"{IM_START}system\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_user(segments: list[Segment], user_prompt: str) -> None:
+    """Append the user turn carrying the <img><CTX>...<CTX></img> + prompt."""
+    segments.append(Segment(f"{IM_START}user\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(INTERNVL_IMG_START, SegmentKind.SEPARATOR))
+    segments.append(Segment(_INTERNVL_IMG_SENTINEL, SegmentKind.USER))
+    segments.append(Segment(INTERNVL_IMG_END, SegmentKind.SEPARATOR))
+    segments.append(Segment(f"\n{user_prompt}", SegmentKind.USER))
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_assistant_turn(
+    segments: list[Segment], thought: str, call: ToolCall,
+) -> None:
+    """Append a complete assistant tool-call turn (role separators + body)."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    _emit_internvl_assistant_step(segments, thought, call)
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_tool_observation(segments: list[Segment], call: ToolCall) -> None:
+    """Append the tool-observation turn following an assistant tool_call."""
+    segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(_format_observation(call), SegmentKind.OBSERVATION))
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_final_answer(segments: list[Segment], final_answer: str) -> None:
+    """Append the closing assistant turn emitting the final answer."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(final_answer, SegmentKind.ANSWER))
+    segments.append(Segment(IM_END, SegmentKind.SEPARATOR))
+
+
 def _build_internvl_segments(
     user_prompt: str,
     trajectory: Trajectory,
@@ -128,41 +168,22 @@ def _build_internvl_segments(
     ``<IMG_CONTEXT>`` token id where N = num_patches * num_image_token.
     """
     sys_text = system_prompt if system_prompt is not None else INTERNVL_DEFAULT_SYSTEM
-
     segments: list[Segment] = []
-    segments.append(Segment(f"{IM_START}system\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
-    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
 
-    segments.append(Segment(f"{IM_START}user\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(INTERNVL_IMG_START, SegmentKind.SEPARATOR))
-    segments.append(Segment(_INTERNVL_IMG_SENTINEL, SegmentKind.USER))
-    segments.append(Segment(INTERNVL_IMG_END, SegmentKind.SEPARATOR))
-    segments.append(Segment(f"\n{user_prompt}", SegmentKind.USER))
-    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+    _append_internvl_system(segments, sys_text)
+    _append_internvl_user(segments, user_prompt)
 
     n_calls = len(trajectory.tool_calls)
     if n_calls == 0:
-        segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-        segments.append(Segment(IM_END, SegmentKind.SEPARATOR))
+        _append_internvl_final_answer(segments, trajectory.final_answer)
         return segments
 
     thoughts = _split_thoughts(trajectory.reasoning_trace, n_steps=n_calls)
     for i, call in enumerate(trajectory.tool_calls):
-        segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-        _emit_internvl_assistant_step(segments, thoughts[i], call)
-        segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+        _append_internvl_assistant_turn(segments, thoughts[i], call)
+        _append_internvl_tool_observation(segments, call)
 
-        obs_text = _format_observation(call)
-        segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(obs_text, SegmentKind.OBSERVATION))
-        segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
-
-    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-    segments.append(Segment(IM_END, SegmentKind.SEPARATOR))
-
+    _append_internvl_final_answer(segments, trajectory.final_answer)
     return segments
 
 
