@@ -67,6 +67,55 @@ def _clean_forward(vlm: Any, batch: Any, device: torch.device) -> torch.Tensor:
     return vlm.forward_with_logits(pixel_values, batch.input_ids, **fwd_kwargs)
 
 
+def _run_t1_training_loop(
+    *,
+    vlm: Any,
+    model: torch.nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler | None,
+    max_steps: int,
+    device: torch.device,
+    amp_dtype: torch.dtype,
+    grad_accum: int,
+) -> tuple[int, float]:
+    """Train until ``max_steps`` optimizer steps. Return (steps_taken, final_loss)."""
+    step = 0
+    micro = 0
+    loss_final = float("nan")
+    while step < max_steps:
+        for batch in loader:
+            if step >= max_steps:
+                break
+            step, micro, loss_final = _t1_train_step(
+                vlm, batch, model, optimizer, scheduler,
+                device, amp_dtype, grad_accum, step, micro,
+            )
+    return step, loss_final
+
+
+def _compute_t1_verdict(
+    *,
+    metrics: dict[str, float],
+    thresholds: T1Thresholds,
+    tool_name_metric: str,
+    answer_em_metric: str,
+) -> tuple[bool, float, float, list[str]]:
+    """Read metrics, apply thresholds, return (passed, tool_acc, answer_em, notes)."""
+    tool_acc = float(metrics.get(tool_name_metric, 0.0))
+    answer_em = float(metrics.get(answer_em_metric, 0.0))
+    passed = (
+        tool_acc >= thresholds.tool_name_acc_min
+        and answer_em >= thresholds.answer_em_min
+    )
+    notes: list[str] = []
+    if tool_acc < thresholds.tool_name_acc_min:
+        notes.append(f"tool_name_acc {tool_acc:.3f} < {thresholds.tool_name_acc_min}")
+    if answer_em < thresholds.answer_em_min:
+        notes.append(f"answer_em {answer_em:.3f} < {thresholds.answer_em_min}")
+    return passed, tool_acc, answer_em, notes
+
+
 def run_t1(
     *,
     vlm: Any,
@@ -93,31 +142,17 @@ def run_t1(
     # adv_trainer convention.
     model.train(False)
     loader = DataLoader(train_ds, batch_size=1, shuffle=True, collate_fn=collator)
-    step = 0
-    micro = 0
-    loss_final = float("nan")
-
-    while step < thresholds.max_steps:
-        for batch in loader:
-            if step >= thresholds.max_steps:
-                break
-            step, micro, loss_final = _t1_train_step(
-                vlm, batch, model, optimizer, scheduler,
-                device_t, amp_dtype, grad_accum, step, micro,
-            )
+    step, loss_final = _run_t1_training_loop(
+        vlm=vlm, model=model, loader=loader, optimizer=optimizer,
+        scheduler=scheduler, max_steps=thresholds.max_steps, device=device_t,
+        amp_dtype=amp_dtype, grad_accum=grad_accum,
+    )
 
     metrics = evaluator(step, 1) or {}
-    tool_acc = float(metrics.get(tool_name_metric, 0.0))
-    answer_em = float(metrics.get(answer_em_metric, 0.0))
-    passed = (
-        tool_acc >= thresholds.tool_name_acc_min
-        and answer_em >= thresholds.answer_em_min
+    passed, tool_acc, answer_em, notes = _compute_t1_verdict(
+        metrics=metrics, thresholds=thresholds,
+        tool_name_metric=tool_name_metric, answer_em_metric=answer_em_metric,
     )
-    notes: list[str] = []
-    if tool_acc < thresholds.tool_name_acc_min:
-        notes.append(f"tool_name_acc {tool_acc:.3f} < {thresholds.tool_name_acc_min}")
-    if answer_em < thresholds.answer_em_min:
-        notes.append(f"answer_em {answer_em:.3f} < {thresholds.answer_em_min}")
 
     result = T1Result(
         passed=passed,
@@ -168,23 +203,10 @@ def make_teacher_forced_evaluator(
         loader = DataLoader(dev_ds, batch_size=1, shuffle=False, collate_fn=collator)
         was_training = model.training
         model.train(False)
-        tool_correct = tool_total = 0
-        ans_correct = ans_total = 0
-        with torch.no_grad():
-            for batch in loader:
-                batch = batch.to(device)
-                with torch.autocast(device_type=device.type, dtype=amp_dtype):
-                    logits = _clean_forward(vlm, batch, device)
-                preds = logits.argmax(dim=-1)
-                gold = batch.input_ids
-                match = preds[:, :-1] == gold[:, 1:]
-                seg = batch.segment_ids[:, 1:]
-                tool_m = seg == tool_name_id
-                ans_m = seg == answer_id
-                tool_correct += int(match[tool_m].sum().item())
-                tool_total += int(tool_m.sum().item())
-                ans_correct += int(match[ans_m].sum().item())
-                ans_total += int(ans_m.sum().item())
+        tool_correct, tool_total, ans_correct, ans_total = _accumulate_proxy_accuracies(
+            vlm=vlm, loader=loader, device=device, amp_dtype=amp_dtype,
+            tool_name_id=tool_name_id, answer_id=answer_id,
+        )
         if was_training:
             model.train(True)
         return {
@@ -195,6 +217,36 @@ def make_teacher_forced_evaluator(
         }
 
     return _evaluate
+
+
+def _accumulate_proxy_accuracies(
+    *,
+    vlm: Any,
+    loader: DataLoader,
+    device: torch.device,
+    amp_dtype: torch.dtype,
+    tool_name_id: int,
+    answer_id: int,
+) -> tuple[int, int, int, int]:
+    """Iterate dev loader, return (tool_correct, tool_total, ans_correct, ans_total)."""
+    tool_correct = tool_total = 0
+    ans_correct = ans_total = 0
+    with torch.no_grad():
+        for batch in loader:
+            batch = batch.to(device)
+            with torch.autocast(device_type=device.type, dtype=amp_dtype):
+                logits = _clean_forward(vlm, batch, device)
+            preds = logits.argmax(dim=-1)
+            gold = batch.input_ids
+            match = preds[:, :-1] == gold[:, 1:]
+            seg = batch.segment_ids[:, 1:]
+            tool_m = seg == tool_name_id
+            ans_m = seg == answer_id
+            tool_correct += int(match[tool_m].sum().item())
+            tool_total += int(tool_m.sum().item())
+            ans_correct += int(match[ans_m].sum().item())
+            ans_total += int(ans_m.sum().item())
+    return tool_correct, tool_total, ans_correct, ans_total
 
 
 def _build_t1_parser() -> argparse.ArgumentParser:
