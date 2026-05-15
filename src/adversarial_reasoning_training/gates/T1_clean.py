@@ -255,53 +255,57 @@ def _t1_train_step(
     return step, micro, loss_val
 
 
-def _main() -> int:
-    """CLI entrypoint:
+def _load_t1_configs(
+    data: Path, gold: Path, full_ft: Path, training: Path,
+) -> dict[str, dict]:
+    """Load the four YAML configs required by the T1 gate."""
+    return {
+        "data": load_gate_yaml(data),
+        "gold": load_gate_yaml(gold),
+        "full_ft": load_gate_yaml(full_ft),
+        "training": load_gate_yaml(training),
+    }
 
-    ``python -m adversarial_reasoning_training.gates.T1_clean
-        --model qwen3_vl_8b
-        --max-steps 200
-        --out runs/t1/gates/T1.json``
-    """
+
+def _load_t1_model(
+    model_alias: str, models_yaml: Path, ft_cfg: dict,
+) -> tuple[Any, torch.nn.Module]:
+    """Load the VLM, cast to bf16, and apply the freeze strategy."""
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
     from ..trainer.freeze import FreezeConfig, apply_freeze
-    from ..trainer.optim import (
-        OptimConfig,
-        ScheduleConfig,
-        build_optimizer,
-        build_scheduler,
-    )
 
-    parser = _build_t1_parser()
-    args = parser.parse_args()
-
-    data_cfg = load_gate_yaml(args.data)
-    gold_cfg = load_gate_yaml(args.gold)
-    ft_cfg = load_gate_yaml(args.full_ft)
-    train_cfg = load_gate_yaml(args.training)
-
-    vlm = load_hf_vlm(args.model, config_path=str(args.models_yaml))
+    vlm = load_hf_vlm(model_alias, config_path=str(models_yaml))
     model = vlm.model
     model.to(torch.bfloat16)
-
     apply_freeze(model, FreezeConfig(strategy=ft_cfg.get("freeze_strategy", "none")))
+    return vlm, model
 
-    collator = get_collator(vlm)
+
+def _build_t1_datasets(data_cfg: dict, gold_cfg: dict) -> tuple[Dataset, Dataset]:
+    """Build train + dev datasets sharing one metadata lookup."""
     metadata_lookup = build_metadata_lookup(data_cfg)
     train_ds = build_train_dataset(
-        data_cfg,
-        gold_cfg,
+        data_cfg, gold_cfg,
         split=data_cfg.get("train_split", "train"),
         n=data_cfg.get("n_train"),
         metadata_lookup=metadata_lookup,
     )
     dev_ds = build_train_dataset(
-        data_cfg,
-        gold_cfg,
+        data_cfg, gold_cfg,
         split=data_cfg.get("dev_split", "dev"),
         n=data_cfg.get("n_dev"),
         metadata_lookup=metadata_lookup,
+    )
+    return train_ds, dev_ds
+
+
+def _build_t1_optimization(
+    model: torch.nn.Module, train_cfg: dict, max_steps: int,
+) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler | None]:
+    """Build optimizer + LR scheduler from the training config."""
+    from ..trainer.optim import (
+        OptimConfig, ScheduleConfig, build_optimizer, build_scheduler,
     )
 
     lr = train_cfg.get("lr", {})
@@ -318,12 +322,31 @@ def _main() -> int:
     scheduler = build_scheduler(
         optimizer,
         ScheduleConfig(
-            total_steps=args.max_steps,
+            total_steps=max_steps,
             warmup_pct=float(train_cfg.get("warmup_pct", 0.03)),
             kind=str(train_cfg.get("schedule", "cosine")),
         ),
     )
+    return optimizer, scheduler
 
+
+def _main() -> int:
+    """CLI entrypoint:
+
+    ``python -m adversarial_reasoning_training.gates.T1_clean
+        --model qwen3_vl_8b
+        --max-steps 200
+        --out runs/t1/gates/T1.json``
+    """
+    args = _build_t1_parser().parse_args()
+    cfgs = _load_t1_configs(args.data, args.gold, args.full_ft, args.training)
+    vlm, model = _load_t1_model(args.model, args.models_yaml, cfgs["full_ft"])
+    train_ds, dev_ds = _build_t1_datasets(cfgs["data"], cfgs["gold"])
+    optimizer, scheduler = _build_t1_optimization(
+        model, cfgs["training"], args.max_steps,
+    )
+
+    collator = get_collator(vlm)
     device_t = torch.device(args.device)
     evaluator = make_teacher_forced_evaluator(
         vlm=vlm, model=model, dev_ds=dev_ds, collator=collator, device=device_t,

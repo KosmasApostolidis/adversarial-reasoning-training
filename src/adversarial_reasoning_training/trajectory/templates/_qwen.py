@@ -23,6 +23,63 @@ QWEN_TOOL_OPEN = "<tool_call>"
 QWEN_TOOL_CLOSE = "</tool_call>"
 
 
+def _append_qwen_system(segments: list[Segment], sys_text: str) -> None:
+    """Append the system turn that prefaces every Qwen conversation."""
+    segments.append(Segment(f"{QWEN_IM_START}system\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
+    segments.append(Segment(f"\n{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_qwen_user_with_image(
+    segments: list[Segment], user_prompt: str, num_image_pad: int,
+) -> None:
+    """Append the user turn carrying ``<|vision_*|>``-wrapped image pads + prompt."""
+    segments.append(Segment(f"{QWEN_IM_START}user\n", SegmentKind.SEPARATOR))
+    image_pad_run = QWEN_IMAGE_PAD * max(1, num_image_pad)
+    segments.append(
+        Segment(f"{QWEN_VIS_START}{image_pad_run}{QWEN_VIS_END}\n", SegmentKind.USER)
+    )
+    segments.append(Segment(user_prompt, SegmentKind.USER))
+    segments.append(Segment(f"\n{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_qwen_assistant_tool_call(
+    segments: list[Segment], thought: str, call: Any,
+) -> None:
+    """Append one assistant turn that emits ``Thought:`` then a tool_call JSON."""
+    segments.append(Segment(f"{QWEN_IM_START}assistant\n", SegmentKind.SEPARATOR))
+    segments.append(Segment("Thought: ", SegmentKind.SEPARATOR))
+    segments.append(Segment(thought, SegmentKind.THOUGHT))
+    segments.append(Segment(f"\n{QWEN_TOOL_OPEN}\n", SegmentKind.SEPARATOR))
+    segments.append(Segment('{"name": ', SegmentKind.SEPARATOR))
+    segments.append(Segment(f'"{call.name}"', SegmentKind.TOOL_NAME))
+    segments.append(Segment(', "arguments": ', SegmentKind.SEPARATOR))
+    segments.append(
+        Segment(json.dumps(call.args, ensure_ascii=False), SegmentKind.TOOL_ARGS)
+    )
+    segments.append(Segment("}", SegmentKind.SEPARATOR))
+    segments.append(Segment(f"\n{QWEN_TOOL_CLOSE}\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(f"{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_qwen_tool_observation(segments: list[Segment], call: Any) -> None:
+    """Append the tool-observation turn that follows an assistant tool_call.
+
+    Observation tokens get weight 0 via ``SegmentKind.OBSERVATION``.
+    """
+    segments.append(Segment(f"{QWEN_IM_START}tool\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(_format_observation(call), SegmentKind.OBSERVATION))
+    segments.append(Segment(f"\n{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_qwen_final_answer(segments: list[Segment], final_answer: str) -> None:
+    """Append the closing assistant turn that emits the final answer."""
+    segments.append(Segment(f"{QWEN_IM_START}assistant\n", SegmentKind.SEPARATOR))
+    segments.append(Segment("Answer: ", SegmentKind.SEPARATOR))
+    segments.append(Segment(final_answer, SegmentKind.ANSWER))
+    segments.append(Segment(f"\n{QWEN_IM_END}", SegmentKind.SEPARATOR))
+
+
 def _build_qwen_segments(
     user_prompt: str,
     trajectory: Trajectory,
@@ -41,16 +98,12 @@ def _build_qwen_segments(
             <tool_call>{...tool_1}</tool_call>\n
         <|im_end|>\n
         <|im_start|>tool\n{obs_1}\n<|im_end|>\n
-        <|im_start|>assistant\n
-            Thought: {thought_2}\n
-            <tool_call>{...tool_2}</tool_call>\n
-        <|im_end|>\n
         ...
         <|im_start|>assistant\n
             Answer: {final_answer}\n
         <|im_end|>
 
-    Reasoning-trace text is split by `\\n---\\n` into per-step thoughts
+    Reasoning-trace text is split by ``\\n---\\n`` into per-step thoughts
     if present; otherwise every assistant turn gets an empty Thought.
     """
     sys_text = (
@@ -60,49 +113,17 @@ def _build_qwen_segments(
     )
     segments: list[Segment] = []
 
-    # --- System
-    segments.append(Segment(f"{QWEN_IM_START}system\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
-    segments.append(Segment(f"\n{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
+    _append_qwen_system(segments, sys_text)
+    _append_qwen_user_with_image(segments, user_prompt, num_image_pad)
 
-    # --- User (image + prompt)
-    segments.append(Segment(f"{QWEN_IM_START}user\n", SegmentKind.SEPARATOR))
-    image_pad_run = QWEN_IMAGE_PAD * max(1, num_image_pad)
-    segments.append(
-        Segment(f"{QWEN_VIS_START}{image_pad_run}{QWEN_VIS_END}\n", SegmentKind.USER)
+    thoughts = _split_thoughts(
+        trajectory.reasoning_trace, n_steps=len(trajectory.tool_calls),
     )
-    segments.append(Segment(user_prompt, SegmentKind.USER))
-    segments.append(Segment(f"\n{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
-
-    # --- Assistant turns, one per tool_call + a final answer turn
-    thoughts = _split_thoughts(trajectory.reasoning_trace, n_steps=len(trajectory.tool_calls))
     for i, call in enumerate(trajectory.tool_calls):
-        segments.append(Segment(f"{QWEN_IM_START}assistant\n", SegmentKind.SEPARATOR))
-        segments.append(Segment("Thought: ", SegmentKind.SEPARATOR))
-        segments.append(Segment(thoughts[i], SegmentKind.THOUGHT))
-        segments.append(Segment(f"\n{QWEN_TOOL_OPEN}\n", SegmentKind.SEPARATOR))
-        segments.append(Segment('{"name": ', SegmentKind.SEPARATOR))
-        segments.append(Segment(f'"{call.name}"', SegmentKind.TOOL_NAME))
-        segments.append(Segment(', "arguments": ', SegmentKind.SEPARATOR))
-        segments.append(
-            Segment(json.dumps(call.args, ensure_ascii=False), SegmentKind.TOOL_ARGS)
-        )
-        segments.append(Segment("}", SegmentKind.SEPARATOR))
-        segments.append(Segment(f"\n{QWEN_TOOL_CLOSE}\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(f"{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
+        _append_qwen_assistant_tool_call(segments, thoughts[i], call)
+        _append_qwen_tool_observation(segments, call)
 
-        # Tool observation — weight 0 via OBSERVATION kind.
-        obs_text = _format_observation(call)
-        segments.append(Segment(f"{QWEN_IM_START}tool\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(obs_text, SegmentKind.OBSERVATION))
-        segments.append(Segment(f"\n{QWEN_IM_END}\n", SegmentKind.SEPARATOR))
-
-    # --- Final answer turn
-    segments.append(Segment(f"{QWEN_IM_START}assistant\n", SegmentKind.SEPARATOR))
-    segments.append(Segment("Answer: ", SegmentKind.SEPARATOR))
-    segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-    segments.append(Segment(f"\n{QWEN_IM_END}", SegmentKind.SEPARATOR))
-
+    _append_qwen_final_answer(segments, trajectory.final_answer)
     return segments
 
 

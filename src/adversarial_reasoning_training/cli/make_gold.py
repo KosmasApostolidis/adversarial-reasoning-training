@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +42,62 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _iter_and_write_gold(
+    samples: list[Any],
+    cache_dir: Path,
+    oracle_cfg: OracleConfig,
+    metadata_lookup: dict[str, dict[str, Any]],
+    task_id: str,
+    overwrite: bool,
+) -> tuple[int, int]:
+    """Iterate samples, generate trajectories, write to cache.
+
+    Returns ``(n_written, n_skipped)``. Existing cache entries are skipped
+    unless ``overwrite`` is true; the cache key is content-addressed so
+    re-runs are idempotent.
+    """
+    n_written = 0
+    n_skipped = 0
+    for s in samples:
+        sid = s.sample_id
+        key = GoldKey(
+            task_id=task_id,
+            sample_id=sid,
+            prompt=s.prompt,
+            image=s.image,
+            oracle_version=oracle_cfg.version,
+        )
+        if gold_exists(cache_dir, key) and not overwrite:
+            n_skipped += 1
+            continue
+        traj = generate_trajectory(
+            task_id=task_id,
+            sample_id=sid,
+            metadata=metadata_lookup.get(sid, {}),
+            config=oracle_cfg,
+        )
+        save_gold(cache_dir, key, traj)
+        n_written += 1
+    return n_written, n_skipped
+
+
+def _write_summary_sentinel(cache_dir: Path, split: str, summary: dict) -> None:
+    """Atomically write a per-split summary file inside ``cache_dir``.
+
+    External runners (e.g. scripts/run_pipeline.sh under ``--skip-existing``)
+    rely on this sentinel to detect a completed split without re-iterating
+    the entire dataset loader. SIGKILL/OOM/disk-full mid-write would
+    otherwise leave a truncated JSON that the pipeline pre-check trusts as
+    proof-of-completion; the tmp-then-rename pattern avoids that. The tmp
+    filename includes the PID so concurrent runs on different splits cannot
+    stomp each other's tmp file.
+    """
+    summary_path = Path(cache_dir) / f"_summary_{split}.json"
+    tmp_path = summary_path.with_name(f"{summary_path.name}.tmp.{os.getpid()}")
+    tmp_path.write_text(json.dumps(summary, indent=2))
+    os.replace(tmp_path, summary_path)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -68,31 +125,12 @@ def main(argv: list[str] | None = None) -> int:
         config_path=config_path,
     ))
 
-    n_total = len(samples)
-    n_written = 0
-    n_skipped = 0
-    for s in samples:
-        sid = s.sample_id
-        meta = metadata_lookup.get(sid, {})
-        key = GoldKey(
-            task_id=task_id,
-            sample_id=sid,
-            prompt=s.prompt,
-            image=s.image,
-            oracle_version=oracle_cfg.version,
-        )
-        if gold_exists(cache_dir, key) and not args.overwrite:
-            n_skipped += 1
-            continue
-
-        traj = generate_trajectory(
-            task_id=task_id, sample_id=sid, metadata=meta, config=oracle_cfg,
-        )
-        save_gold(cache_dir, key, traj)
-        n_written += 1
+    n_written, n_skipped = _iter_and_write_gold(
+        samples, cache_dir, oracle_cfg, metadata_lookup, task_id, args.overwrite,
+    )
 
     summary = {
-        "total": n_total,
+        "total": len(samples),
         "written": n_written,
         "skipped": n_skipped,
         "cache_dir": str(cache_dir),
@@ -101,22 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         "split": args.split,
         "synthetic": synthetic,
     }
-    # Persist a per-split summary file inside cache_dir so external runners
-    # (e.g. scripts/run_pipeline.sh under --skip-existing) have a stable
-    # sentinel to detect a completed split. Without it, every pipeline
-    # invocation re-iterates the entire split — gold_exists() short-circuits
-    # writes but the load_task call still hits the dataset loader.
-    #
-    # Atomic write: SIGKILL/OOM/disk-full mid-write would otherwise leave a
-    # truncated JSON sentinel that the pipeline pre-check trusts as
-    # proof-of-completion, silently consuming a partial gold cache. tmp
-    # filename uses the PID so concurrent runs targeting different splits
-    # cannot stomp each other's tmp file.
-    import os as _os  # local import keeps the public import surface clean
-    summary_path = Path(cache_dir) / f"_summary_{args.split}.json"
-    tmp_path = summary_path.with_name(f"{summary_path.name}.tmp.{_os.getpid()}")
-    tmp_path.write_text(json.dumps(summary, indent=2))
-    _os.replace(tmp_path, summary_path)
+    _write_summary_sentinel(cache_dir, args.split, summary)
 
     print(json.dumps(summary, indent=2))
     return 0
