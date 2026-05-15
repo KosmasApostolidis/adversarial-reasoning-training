@@ -64,26 +64,39 @@ def _process_image_llava(
             f"LLaVA-NeXT processor does not expose image_token={image_token_text!r}."
         )
 
-    num_image_tokens = 1
+    num_image_tokens = _count_llava_image_tokens(
+        processor, image, image_token_text, image_token_id,
+    )
+    return forward_kwargs, int(image_token_id), num_image_tokens
+
+
+def _count_llava_image_tokens(
+    processor: Any,
+    image: Image.Image,
+    image_token_text: str,
+    image_token_id: int,
+) -> int:
+    """Ask the processor how many image tokens it would emit; fall back to 1.
+
+    Older transformers versions don't pre-expand the image placeholder; the
+    model handles expansion at forward time, so a single image token is
+    sufficient and keeps input_ids length aligned with output logits. The
+    fallback is logged at DEBUG so it stays auditable without spamming
+    production runs.
+    """
     try:
         proc_out = processor(text=image_token_text, images=image, return_tensors="pt")
         ids = proc_out["input_ids"][0].tolist()
         count = sum(1 for t in ids if t == image_token_id)
         if count >= 1:
-            num_image_tokens = count
+            return count
     except (KeyError, IndexError, RuntimeError, ValueError, AttributeError, TypeError):
-        # Older transformers versions don't pre-expand the image placeholder; the
-        # model handles expansion at forward time, so a single image token is
-        # sufficient and keeps input_ids length aligned with output logits.
-        # Log at DEBUG so the fallback is auditable without spamming production runs.
         logger.debug(
             "LLaVA-NeXT processor did not pre-expand image placeholder; "
             "falling back to num_image_tokens=1.",
             exc_info=True,
         )
-        num_image_tokens = 1
-
-    return forward_kwargs, int(image_token_id), num_image_tokens
+    return 1
 
 
 def _emit_llava_assistant_step(
