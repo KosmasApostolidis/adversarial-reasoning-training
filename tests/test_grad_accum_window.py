@@ -119,6 +119,44 @@ def _events(tmp_path: Path) -> list[dict]:
     return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
 
 
+def _build_scripted_trainer(
+    *, tmp_path: Path, vocab: int, epochs: int = 1, nan_at: int | None = None,
+) -> _ScriptedTrainer:
+    """Construct a _ScriptedTrainer with grad_accum=4 + the rest of the
+    fixed trainer config shared by every test in this module.
+    """
+    model = _StubModel(vocab=vocab)
+    vlm = _StubVLM(model)
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
+
+    cfg = TrainerConfig(
+        epochs=epochs,
+        grad_accum=4,
+        log_every=1,
+        eval_every=0,
+        save_every=0,
+        grad_clip_norm=1.0,
+        amp_dtype="fp32",
+        run_dir=tmp_path,
+        final_save_include_optimizer=False,
+    )
+
+    def _unused_loss(*_a, **_kw):  # pragma: no cover
+        raise AssertionError("override should bypass loss_fn")
+
+    return _ScriptedTrainer(
+        nan_at=nan_at,
+        vlm=vlm,
+        model=model,
+        collator=_identity_collate,  # type: ignore[arg-type]
+        loss_fn=_unused_loss,  # type: ignore[arg-type]
+        optimizer=optimizer,
+        scheduler=None,
+        config=cfg,
+        device="cpu",
+    )
+
+
 @pytest.mark.unit
 def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
     """C1: 5 micro-batches, grad_accum=4, 2 epochs.
@@ -132,38 +170,8 @@ def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
     """
     torch.manual_seed(0)
     vocab, T = 16, 8
-    model = _StubModel(vocab=vocab)
-    vlm = _StubVLM(model)
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
-
-    cfg = TrainerConfig(
-        epochs=2,
-        grad_accum=4,
-        log_every=1,
-        eval_every=0,
-        save_every=0,
-        grad_clip_norm=1.0,
-        amp_dtype="fp32",
-        run_dir=tmp_path,
-        final_save_include_optimizer=False,
-    )
-
-    def _unused_loss(*_a, **_kw):  # pragma: no cover
-        raise AssertionError("override should bypass loss_fn")
-
-    trainer = _ScriptedTrainer(
-        vlm=vlm,
-        model=model,
-        collator=_identity_collate,  # type: ignore[arg-type]
-        loss_fn=_unused_loss,  # type: ignore[arg-type]
-        optimizer=optimizer,
-        scheduler=None,
-        config=cfg,
-        device="cpu",
-    )
-
-    ds = _DS(n=5, vocab=vocab, T=T)
-    trainer.fit(ds)
+    trainer = _build_scripted_trainer(tmp_path=tmp_path, vocab=vocab, epochs=2)
+    trainer.fit(_DS(n=5, vocab=vocab, T=T))
 
     events = _events(tmp_path)
     fit_done = next(e for e in events if e["event"] == "fit_done")
@@ -173,41 +181,6 @@ def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
         f"expected 4 optimizer steps (2 per epoch incl. tail drain), "
         f"got {fit_done['global_step']}; events={events}"
     )
-
-
-def _build_nan_skip_trainer(*, tmp_path: Path, vocab: int, nan_at: int) -> tuple:
-    """Construct a _ScriptedTrainer + matching dataset for the NaN-skip scenario."""
-    model = _StubModel(vocab=vocab)
-    vlm = _StubVLM(model)
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
-
-    cfg = TrainerConfig(
-        epochs=1,
-        grad_accum=4,
-        log_every=1,
-        eval_every=0,
-        save_every=0,
-        grad_clip_norm=1.0,
-        amp_dtype="fp32",
-        run_dir=tmp_path,
-        final_save_include_optimizer=False,
-    )
-
-    def _unused_loss(*_a, **_kw):  # pragma: no cover
-        raise AssertionError("override should bypass loss_fn")
-
-    trainer = _ScriptedTrainer(
-        nan_at=nan_at,
-        vlm=vlm,
-        model=model,
-        collator=_identity_collate,  # type: ignore[arg-type]
-        loss_fn=_unused_loss,  # type: ignore[arg-type]
-        optimizer=optimizer,
-        scheduler=None,
-        config=cfg,
-        device="cpu",
-    )
-    return trainer, cfg
 
 
 @pytest.mark.unit
@@ -228,7 +201,7 @@ def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
     """
     torch.manual_seed(0)
     vocab, T = 16, 8
-    trainer, _ = _build_nan_skip_trainer(tmp_path=tmp_path, vocab=vocab, nan_at=2)
+    trainer = _build_scripted_trainer(tmp_path=tmp_path, vocab=vocab, nan_at=2)
 
     ds = _DS(n=8, vocab=vocab, T=T)
     trainer.fit(ds)
