@@ -175,24 +175,8 @@ def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.unit
-def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
-    """C2: grad_accum=4, n=8, NaN injected at call #2 (micro_idx=1).
-
-    Pre-fix the trainer steps at micro_idx=3 with only 3 valid
-    backwards in the buffer (mic 0 was zeroed by the NaN-skip path),
-    dividing by grad_accum=4 → effective gradient and reported
-    avg_loss are 3/4 of true. After fix the trainer waits for 4
-    valid micro-batches before stepping (or matches accum_count to
-    the divisor) so:
-
-    * the first ``train_step`` event reports ``accum_count == 4``
-      (not 3), and
-    * its ``avg_loss`` equals the mean of the 4 contributing losses,
-      not the sum-of-3-divided-by-4.
-    """
-    torch.manual_seed(0)
-    vocab, T = 16, 8
+def _build_nan_skip_trainer(*, tmp_path: Path, vocab: int, nan_at: int) -> tuple:
+    """Construct a _ScriptedTrainer + matching dataset for the NaN-skip scenario."""
     model = _StubModel(vocab=vocab)
     vlm = _StubVLM(model)
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
@@ -213,7 +197,7 @@ def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
         raise AssertionError("override should bypass loss_fn")
 
     trainer = _ScriptedTrainer(
-        nan_at=2,
+        nan_at=nan_at,
         vlm=vlm,
         model=model,
         collator=_identity_collate,  # type: ignore[arg-type]
@@ -223,6 +207,28 @@ def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
         config=cfg,
         device="cpu",
     )
+    return trainer, cfg
+
+
+@pytest.mark.unit
+def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
+    """C2: grad_accum=4, n=8, NaN injected at call #2 (micro_idx=1).
+
+    Pre-fix the trainer steps at micro_idx=3 with only 3 valid
+    backwards in the buffer (mic 0 was zeroed by the NaN-skip path),
+    dividing by grad_accum=4 → effective gradient and reported
+    avg_loss are 3/4 of true. After fix the trainer waits for 4
+    valid micro-batches before stepping (or matches accum_count to
+    the divisor) so:
+
+    * the first ``train_step`` event reports ``accum_count == 4``
+      (not 3), and
+    * its ``avg_loss`` equals the mean of the 4 contributing losses,
+      not the sum-of-3-divided-by-4.
+    """
+    torch.manual_seed(0)
+    vocab, T = 16, 8
+    trainer, _ = _build_nan_skip_trainer(tmp_path=tmp_path, vocab=vocab, nan_at=2)
 
     ds = _DS(n=8, vocab=vocab, T=T)
     trainer.fit(ds)
@@ -249,7 +255,5 @@ def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
         f"reset, not silently shrink); got accum_count={first['accum_count']}"
     )
     # avg_loss must equal accum_loss_sum / accum_count, not / grad_accum.
-    # We can't recompute the exact loss without rerunning forward, but
-    # we CAN assert it's finite and within the realistic CE range.
     assert torch.isfinite(torch.tensor(first["avg_loss"])).item()
     assert 0.0 < first["avg_loss"] < 50.0
