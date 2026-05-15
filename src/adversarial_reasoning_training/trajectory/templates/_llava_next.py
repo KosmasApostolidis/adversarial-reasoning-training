@@ -104,6 +104,35 @@ def _emit_llava_assistant_step(
     segments.append(Segment(_LLAVA_EOS_SENTINEL, SegmentKind.SEPARATOR))
 
 
+def _append_llava_user_prelude(
+    segments: list[Segment], sys_text: str, user_prompt: str,
+) -> None:
+    """Append BOS + [INST] + image sentinel + system/prompt body + [/INST]."""
+    body = f"{sys_text}\n\n{user_prompt}" if sys_text else user_prompt
+    segments.append(Segment(_LLAVA_BOS_SENTINEL, SegmentKind.SEPARATOR))
+    segments.append(Segment(LLAVA_INST_OPEN, SegmentKind.SEPARATOR))
+    segments.append(Segment(_LLAVA_IMG_SENTINEL, SegmentKind.USER))
+    segments.append(Segment(f"\n{body}", SegmentKind.USER))
+    segments.append(Segment(LLAVA_INST_CLOSE, SegmentKind.SEPARATOR))
+
+
+def _append_llava_observation_block(
+    segments: list[Segment], call: ToolCall,
+) -> None:
+    """Append the [INST] Observation: {obs} [/INST] block following a tool_call."""
+    segments.append(Segment("[INST] Observation: ", SegmentKind.SEPARATOR))
+    segments.append(Segment(_format_observation(call), SegmentKind.OBSERVATION))
+    segments.append(Segment(LLAVA_INST_CLOSE, SegmentKind.SEPARATOR))
+
+
+def _append_llava_final_answer(
+    segments: list[Segment], final_answer: str,
+) -> None:
+    """Append the final assistant answer followed by EOS sentinel."""
+    segments.append(Segment(final_answer, SegmentKind.ANSWER))
+    segments.append(Segment(_LLAVA_EOS_SENTINEL, SegmentKind.SEPARATOR))
+
+
 def _build_llava_segments(
     user_prompt: str,
     trajectory: Trajectory,
@@ -126,38 +155,23 @@ def _build_llava_segments(
     ``_tokenize_llava_segments`` can substitute them with literal token ids.
     """
     sys_text = system_prompt if system_prompt is not None else LLAVA_DEFAULT_SYSTEM
-    body = f"{sys_text}\n\n{user_prompt}" if sys_text else user_prompt
-
     segments: list[Segment] = []
-    segments.append(Segment(_LLAVA_BOS_SENTINEL, SegmentKind.SEPARATOR))
-    segments.append(Segment(LLAVA_INST_OPEN, SegmentKind.SEPARATOR))
-    segments.append(Segment(_LLAVA_IMG_SENTINEL, SegmentKind.USER))
-    segments.append(Segment(f"\n{body}", SegmentKind.USER))
-    segments.append(Segment(LLAVA_INST_CLOSE, SegmentKind.SEPARATOR))
+
+    _append_llava_user_prelude(segments, sys_text, user_prompt)
 
     n_calls = len(trajectory.tool_calls)
     if n_calls == 0:
-        segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-        segments.append(Segment(_LLAVA_EOS_SENTINEL, SegmentKind.SEPARATOR))
+        _append_llava_final_answer(segments, trajectory.final_answer)
         return segments
 
     thoughts = _split_thoughts(trajectory.reasoning_trace, n_steps=n_calls)
     _emit_llava_assistant_step(segments, thoughts[0], trajectory.tool_calls[0])
-
     for i in range(1, n_calls):
-        prev_obs = _format_observation(trajectory.tool_calls[i - 1])
-        segments.append(Segment("[INST] Observation: ", SegmentKind.SEPARATOR))
-        segments.append(Segment(prev_obs, SegmentKind.OBSERVATION))
-        segments.append(Segment(LLAVA_INST_CLOSE, SegmentKind.SEPARATOR))
+        _append_llava_observation_block(segments, trajectory.tool_calls[i - 1])
         _emit_llava_assistant_step(segments, thoughts[i], trajectory.tool_calls[i])
 
-    last_obs = _format_observation(trajectory.tool_calls[-1])
-    segments.append(Segment("[INST] Observation: ", SegmentKind.SEPARATOR))
-    segments.append(Segment(last_obs, SegmentKind.OBSERVATION))
-    segments.append(Segment(LLAVA_INST_CLOSE, SegmentKind.SEPARATOR))
-    segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-    segments.append(Segment(_LLAVA_EOS_SENTINEL, SegmentKind.SEPARATOR))
-
+    _append_llava_observation_block(segments, trajectory.tool_calls[-1])
+    _append_llava_final_answer(segments, trajectory.final_answer)
     return segments
 
 
@@ -198,6 +212,29 @@ def _tokenize_llava_segments(
     return all_ids, all_seg
 
 
+def _require_llava_special_tokens(tokenizer: Any) -> None:
+    """Verify the LLaVA-NeXT tokenizer exposes both BOS and EOS token ids.
+
+    Mistral-Instruct's chat template needs both to bracket turns: dropping BOS
+    mis-routes the first user prompt; dropping EOS collapses assistant-turn
+    boundaries so the loss mask leaks across turns. The tokenize step is
+    permissive (sentinels skipped silently when ids are None), so we fail loud
+    here instead of producing quietly corrupt teacher-forced sequences.
+    """
+    if getattr(tokenizer, "bos_token_id", None) is None:
+        raise RuntimeError(
+            "LLaVA-NeXT tokenizer is missing bos_token_id; cannot build "
+            "teacher-forced sequence. Check that the processor was loaded "
+            "from a Mistral-Instruct-compatible checkpoint."
+        )
+    if getattr(tokenizer, "eos_token_id", None) is None:
+        raise RuntimeError(
+            "LLaVA-NeXT tokenizer is missing eos_token_id; cannot delimit "
+            "assistant turns. Check that the processor was loaded from a "
+            "Mistral-Instruct-compatible checkpoint."
+        )
+
+
 def assemble_llava_next(
     user_prompt: str,
     trajectory: Trajectory,
@@ -215,24 +252,7 @@ def assemble_llava_next(
     accepted by ``LlavaNext.forward_with_logits``.
     """
     tokenizer = getattr(processor, "tokenizer", processor)
-    # Mistral-Instruct's chat template needs both BOS and EOS to bracket
-    # turns: dropping BOS mis-routes the first user prompt; dropping EOS
-    # collapses assistant-turn boundaries and the loss mask leaks across
-    # turns. The tokenize step is permissive (sentinels skipped silently
-    # when ids are None), so we fail loud here instead of producing
-    # quietly corrupt teacher-forced sequences.
-    if getattr(tokenizer, "bos_token_id", None) is None:
-        raise RuntimeError(
-            "LLaVA-NeXT tokenizer is missing bos_token_id; cannot build "
-            "teacher-forced sequence. Check that the processor was loaded "
-            "from a Mistral-Instruct-compatible checkpoint."
-        )
-    if getattr(tokenizer, "eos_token_id", None) is None:
-        raise RuntimeError(
-            "LLaVA-NeXT tokenizer is missing eos_token_id; cannot delimit "
-            "assistant turns. Check that the processor was loaded from a "
-            "Mistral-Instruct-compatible checkpoint."
-        )
+    _require_llava_special_tokens(tokenizer)
     forward_kwargs, image_token_id, num_image_tokens = _process_image_llava(
         image, processor
     )
