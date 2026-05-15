@@ -14,9 +14,9 @@ import torch
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
 from PIL import Image
 
-from ..mask import build_masks, labels_from_input_ids
 from ..segments import DEFAULT_MASK_WEIGHTS, MaskWeights, Segment, SegmentKind
 from ..teacher_force import TeacherForcedBatch, _format_observation, _split_thoughts
+from ._common import pack_teacher_forced_batch
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def _emit_llava_ov_assistant_step(
     thought: str,
     call: ToolCall,
 ) -> None:
-    """Append one assistant turn: Thought + JSON tool-call."""
+    """Append one assistant turn body: Thought + JSON tool-call (no role separators)."""
     segments.append(Segment("Thought: ", SegmentKind.SEPARATOR))
     segments.append(Segment(thought, SegmentKind.THOUGHT))
     segments.append(Segment('\n{"tool": ', SegmentKind.SEPARATOR))
@@ -85,6 +85,54 @@ def _emit_llava_ov_assistant_step(
         Segment(json.dumps(call.args, ensure_ascii=False), SegmentKind.TOOL_ARGS)
     )
     segments.append(Segment("}", SegmentKind.SEPARATOR))
+
+
+def _append_llava_ov_system(segments: list[Segment], sys_text: str) -> None:
+    """Append the system turn prefacing every LLaVA-OneVision conversation."""
+    segments.append(Segment(f"{IM_START}system\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
+    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_llava_ov_user(segments: list[Segment], user_prompt: str) -> None:
+    """Append the user turn carrying the image sentinel + prompt."""
+    segments.append(Segment(f"{IM_START}user\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(_IMG_SENTINEL, SegmentKind.USER))
+    segments.append(Segment(f"\n{user_prompt}", SegmentKind.USER))
+    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_llava_ov_assistant_turn(
+    segments: list[Segment], thought: str, call: ToolCall,
+) -> None:
+    """Append a complete assistant tool-call turn (role separators + body)."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    _emit_llava_ov_assistant_step(segments, thought, call)
+    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_llava_ov_tool_observation(segments: list[Segment], call: ToolCall) -> None:
+    """Append the tool-observation turn that follows an assistant tool_call."""
+    segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(_format_observation(call), SegmentKind.OBSERVATION))
+    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_llava_ov_final_answer(segments: list[Segment], final_answer: str) -> None:
+    """Append the closing assistant turn that emits the final answer."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    segments.append(Segment("Answer: ", SegmentKind.SEPARATOR))
+    segments.append(Segment(final_answer, SegmentKind.ANSWER))
+    segments.append(Segment(f"\n{IM_END}", SegmentKind.SEPARATOR))
+
+
+def _append_llava_ov_empty_trajectory_answer(
+    segments: list[Segment], final_answer: str,
+) -> None:
+    """Append a bare assistant answer turn when the trajectory has no tool calls."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(final_answer, SegmentKind.ANSWER))
+    segments.append(Segment(f"\n{IM_END}", SegmentKind.SEPARATOR))
 
 
 def _build_llava_ov_segments(
@@ -106,54 +154,24 @@ def _build_llava_ov_segments(
         <|im_start|>assistant\nAnswer: {final}\n<|im_end|>
     """
     sys_text = system_prompt if system_prompt is not None else LLAVA_OV_DEFAULT_SYSTEM
-
     segments: list[Segment] = []
 
-    # System
-    segments.append(Segment(f"{IM_START}system\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
-    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
-
-    # User (image + prompt)
-    segments.append(Segment(f"{IM_START}user\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(_IMG_SENTINEL, SegmentKind.USER))
-    segments.append(Segment(f"\n{user_prompt}", SegmentKind.USER))
-    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
+    _append_llava_ov_system(segments, sys_text)
+    _append_llava_ov_user(segments, user_prompt)
 
     n_calls = len(trajectory.tool_calls)
     if n_calls == 0:
-        segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-        segments.append(Segment(f"\n{IM_END}", SegmentKind.SEPARATOR))
+        _append_llava_ov_empty_trajectory_answer(segments, trajectory.final_answer)
         return segments
 
     thoughts = _split_thoughts(trajectory.reasoning_trace, n_steps=n_calls)
-
-    # First assistant turn
-    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-    _emit_llava_ov_assistant_step(segments, thoughts[0], trajectory.tool_calls[0])
-    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
-
-    # Middle assistant turns, each preceded by a tool observation
+    _append_llava_ov_assistant_turn(segments, thoughts[0], trajectory.tool_calls[0])
     for i in range(1, n_calls):
-        prev_obs = _format_observation(trajectory.tool_calls[i - 1])
-        segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(prev_obs, SegmentKind.OBSERVATION))
-        segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-        _emit_llava_ov_assistant_step(segments, thoughts[i], trajectory.tool_calls[i])
-        segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
+        _append_llava_ov_tool_observation(segments, trajectory.tool_calls[i - 1])
+        _append_llava_ov_assistant_turn(segments, thoughts[i], trajectory.tool_calls[i])
 
-    # Final observation + answer
-    last_obs = _format_observation(trajectory.tool_calls[-1])
-    segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(last_obs, SegmentKind.OBSERVATION))
-    segments.append(Segment(f"\n{IM_END}\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-    segments.append(Segment("Answer: ", SegmentKind.SEPARATOR))
-    segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-    segments.append(Segment(f"\n{IM_END}", SegmentKind.SEPARATOR))
-
+    _append_llava_ov_tool_observation(segments, trajectory.tool_calls[-1])
+    _append_llava_ov_final_answer(segments, trajectory.final_answer)
     return segments
 
 
@@ -211,21 +229,7 @@ def assemble_llava_onevision(
             "assemble_llava_onevision produced zero tokens; empty trajectory?"
         )
 
-    input_ids = torch.tensor([ids], dtype=torch.long)
-    segment_ids = torch.tensor([seg], dtype=torch.long)
-    attention_mask = torch.ones_like(input_ids)
-    task_mask, traj_mask = build_masks(segment_ids, weights)
-    labels = labels_from_input_ids(input_ids, task_mask)
-
-    forward_kwargs["attention_mask"] = attention_mask
-
-    return TeacherForcedBatch(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        segment_ids=segment_ids,
-        task_mask=task_mask,
-        traj_mask=traj_mask,
-        labels=labels,
-        forward_kwargs=forward_kwargs,
-        segments=segments,
+    return pack_teacher_forced_batch(
+        ids=ids, seg=seg, segments=segments,
+        forward_kwargs=forward_kwargs, weights=weights,
     )

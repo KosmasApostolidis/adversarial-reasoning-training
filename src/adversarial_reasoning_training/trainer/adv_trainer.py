@@ -390,6 +390,54 @@ class AdvTrainer:
         frac = (epoch - 1) / (self.config.epochs - 1)
         loss_cfg.beta = beta_start + frac * (beta_end - beta_start)
 
+    def _handle_nan_loss(
+        self,
+        *,
+        epoch: int,
+        micro_idx: int,
+        diag: dict[str, float],
+    ) -> None:
+        """Drop grads + reset window after a NaN/Inf micro-batch.
+
+        A single bad batch must not poison every subsequent step. Resetting
+        the window counter forces the next valid micro-batches to form a
+        full grad_accum window before stepping; otherwise the step would
+        apply on a sub-window with mis-scaled gradient.
+        """
+        self._append_log_record({
+            "event": "skipped_nan_loss",
+            "global_step": self._global_step,
+            "epoch": epoch,
+            "micro_idx": micro_idx,
+            "accum_count_before_skip": self._accum_count,
+            **diag,
+        })
+        self.optimizer.zero_grad(set_to_none=True)
+        self._accum_loss_acc = 0.0
+        self._accum_count = 0
+
+    def _drain_partial_window(
+        self,
+        *,
+        epoch: int,
+        last_loss_out: LossCallResult | None,
+        last_diag: dict[str, float],
+        start_time: float,
+    ) -> None:
+        """Apply trailing micro-batches before crossing the epoch boundary.
+
+        If we skip the drain, their grads leak into the next epoch's first
+        window and the final epoch's tail never updates the model at all.
+        """
+        if self._accum_count > 0 and last_loss_out is not None:
+            self._apply_optimizer_step(
+                epoch=epoch,
+                loss_out=last_loss_out,
+                diag=last_diag,
+                reason="epoch_end_drain",
+                start_time=start_time,
+            )
+
     def _run_epoch(
         self,
         *,
@@ -409,23 +457,8 @@ class AdvTrainer:
             batch_t: TeacherForcedBatch = batch.to(self.device)
             loss_out, diag = self._outer_step(batch_t, epsilon)
 
-            # Finite-loss guard: a single bad batch must not poison every
-            # subsequent step. Drop grads for this micro-batch AND reset
-            # the window counter so the next valid micro-batches form a
-            # full grad_accum window before stepping (otherwise the step
-            # would apply on a sub-window with mis-scaled gradient).
             if not torch.isfinite(loss_out.total):
-                self._append_log_record({
-                    "event": "skipped_nan_loss",
-                    "global_step": self._global_step,
-                    "epoch": epoch,
-                    "micro_idx": micro_idx,
-                    "accum_count_before_skip": self._accum_count,
-                    **diag,
-                })
-                self.optimizer.zero_grad(set_to_none=True)
-                self._accum_loss_acc = 0.0
-                self._accum_count = 0
+                self._handle_nan_loss(epoch=epoch, micro_idx=micro_idx, diag=diag)
                 continue
 
             self.scaler.scale(loss_out.total / self.config.grad_accum).backward()
@@ -442,18 +475,10 @@ class AdvTrainer:
                     start_time=start_time,
                 )
 
-        # End-of-epoch drain: trailing micro-batches in a partial
-        # window must be applied before crossing the epoch boundary,
-        # else their grads leak into the next epoch's first window
-        # and the final epoch's tail never updates the model at all.
-        if self._accum_count > 0 and last_loss_out is not None:
-            self._apply_optimizer_step(
-                epoch=epoch,
-                loss_out=last_loss_out,
-                diag=last_diag,
-                reason="epoch_end_drain",
-                start_time=start_time,
-            )
+        self._drain_partial_window(
+            epoch=epoch, last_loss_out=last_loss_out,
+            last_diag=last_diag, start_time=start_time,
+        )
         return last_loss_out, last_diag
 
     def _finalize_training(self, *, total_outer: int, start_time: float) -> None:

@@ -17,10 +17,9 @@ import torch
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
 from PIL import Image
 
-from ..mask import build_masks, labels_from_input_ids
 from ..segments import DEFAULT_MASK_WEIGHTS, MaskWeights, Segment, SegmentKind
 from ..teacher_force import TeacherForcedBatch, _format_observation, _split_thoughts
-from ._common import IM_END, IM_START
+from ._common import IM_END, IM_START, pack_teacher_forced_batch
 
 INTERNVL_IMG_START = "<img>"
 INTERNVL_IMG_END = "</img>"
@@ -103,6 +102,46 @@ def _emit_internvl_assistant_step(
     segments.append(Segment("}", SegmentKind.SEPARATOR))
 
 
+def _append_internvl_system(segments: list[Segment], sys_text: str) -> None:
+    """Append the system turn prefacing every InternVL2 conversation."""
+    segments.append(Segment(f"{IM_START}system\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_user(segments: list[Segment], user_prompt: str) -> None:
+    """Append the user turn carrying the <img><CTX>...<CTX></img> + prompt."""
+    segments.append(Segment(f"{IM_START}user\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(INTERNVL_IMG_START, SegmentKind.SEPARATOR))
+    segments.append(Segment(_INTERNVL_IMG_SENTINEL, SegmentKind.USER))
+    segments.append(Segment(INTERNVL_IMG_END, SegmentKind.SEPARATOR))
+    segments.append(Segment(f"\n{user_prompt}", SegmentKind.USER))
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_assistant_turn(
+    segments: list[Segment], thought: str, call: ToolCall,
+) -> None:
+    """Append a complete assistant tool-call turn (role separators + body)."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    _emit_internvl_assistant_step(segments, thought, call)
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_tool_observation(segments: list[Segment], call: ToolCall) -> None:
+    """Append the tool-observation turn following an assistant tool_call."""
+    segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(_format_observation(call), SegmentKind.OBSERVATION))
+    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+
+
+def _append_internvl_final_answer(segments: list[Segment], final_answer: str) -> None:
+    """Append the closing assistant turn emitting the final answer."""
+    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
+    segments.append(Segment(final_answer, SegmentKind.ANSWER))
+    segments.append(Segment(IM_END, SegmentKind.SEPARATOR))
+
+
 def _build_internvl_segments(
     user_prompt: str,
     trajectory: Trajectory,
@@ -128,41 +167,22 @@ def _build_internvl_segments(
     ``<IMG_CONTEXT>`` token id where N = num_patches * num_image_token.
     """
     sys_text = system_prompt if system_prompt is not None else INTERNVL_DEFAULT_SYSTEM
-
     segments: list[Segment] = []
-    segments.append(Segment(f"{IM_START}system\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(sys_text, SegmentKind.SYSTEM))
-    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
 
-    segments.append(Segment(f"{IM_START}user\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(INTERNVL_IMG_START, SegmentKind.SEPARATOR))
-    segments.append(Segment(_INTERNVL_IMG_SENTINEL, SegmentKind.USER))
-    segments.append(Segment(INTERNVL_IMG_END, SegmentKind.SEPARATOR))
-    segments.append(Segment(f"\n{user_prompt}", SegmentKind.USER))
-    segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+    _append_internvl_system(segments, sys_text)
+    _append_internvl_user(segments, user_prompt)
 
     n_calls = len(trajectory.tool_calls)
     if n_calls == 0:
-        segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-        segments.append(Segment(IM_END, SegmentKind.SEPARATOR))
+        _append_internvl_final_answer(segments, trajectory.final_answer)
         return segments
 
     thoughts = _split_thoughts(trajectory.reasoning_trace, n_steps=n_calls)
     for i, call in enumerate(trajectory.tool_calls):
-        segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-        _emit_internvl_assistant_step(segments, thoughts[i], call)
-        segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
+        _append_internvl_assistant_turn(segments, thoughts[i], call)
+        _append_internvl_tool_observation(segments, call)
 
-        obs_text = _format_observation(call)
-        segments.append(Segment(f"{IM_START}tool\n", SegmentKind.SEPARATOR))
-        segments.append(Segment(obs_text, SegmentKind.OBSERVATION))
-        segments.append(Segment(f"{IM_END}\n", SegmentKind.SEPARATOR))
-
-    segments.append(Segment(f"{IM_START}assistant\n", SegmentKind.SEPARATOR))
-    segments.append(Segment(trajectory.final_answer, SegmentKind.ANSWER))
-    segments.append(Segment(IM_END, SegmentKind.SEPARATOR))
-
+    _append_internvl_final_answer(segments, trajectory.final_answer)
     return segments
 
 
@@ -225,21 +245,7 @@ def assemble_internvl(
     if not ids:
         raise ValueError("assemble_internvl produced zero tokens; empty trajectory?")
 
-    input_ids = torch.tensor([ids], dtype=torch.long)
-    segment_ids = torch.tensor([seg], dtype=torch.long)
-    attention_mask = torch.ones_like(input_ids)
-    task_mask, traj_mask = build_masks(segment_ids, weights)
-    labels = labels_from_input_ids(input_ids, task_mask)
-
-    forward_kwargs["attention_mask"] = attention_mask
-
-    return TeacherForcedBatch(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        segment_ids=segment_ids,
-        task_mask=task_mask,
-        traj_mask=traj_mask,
-        labels=labels,
-        forward_kwargs=forward_kwargs,
-        segments=segments,
+    return pack_teacher_forced_batch(
+        ids=ids, seg=seg, segments=segments,
+        forward_kwargs=forward_kwargs, weights=weights,
     )

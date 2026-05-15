@@ -108,6 +108,31 @@ def _format_observation(call: ToolCall) -> str:
     return str(call.result)
 
 
+def _load_family_dispatch() -> dict[str, Any]:
+    """Build the family → assembler dispatch table with a deferred import.
+
+    Templates import TeacherForcedBatch from this module, so a top-level
+    import would create a cycle. Late-binding inside this loader keeps the
+    module-load graph acyclic. Centralising the table here lets callers
+    get a clear ``ValueError`` listing valid options on a typo (e.g.
+    ``"qwen2_5_vl"``) instead of the older ``NotImplementedError`` which
+    was indistinguishable from "support not yet wired up". When adding a
+    new family, register it here.
+    """
+    from .templates import (
+        assemble_internvl,
+        assemble_llava_next,
+        assemble_llava_onevision,
+        assemble_qwen,
+    )
+    return {
+        VLMFamily.QWEN_VL.value: assemble_qwen,
+        VLMFamily.LLAVA_NEXT.value: assemble_llava_next,
+        VLMFamily.LLAVA_ONEVISION.value: assemble_llava_onevision,
+        VLMFamily.INTERNVL2.value: assemble_internvl,
+    }
+
+
 def assemble(
     family: str,
     user_prompt: str,
@@ -131,32 +156,11 @@ def assemble(
       ``.preprocess_image``, ``._num_image_token``); InternVL2 has no
       first-class HF processor.
     """
-    # Deferred import: templates imports TeacherForcedBatch from this module,
-    # so a top-level import would create a cycle. Late binding keeps the
-    # module-load graph acyclic.
-    from .templates import (
-        assemble_internvl,
-        assemble_llava_next,
-        assemble_llava_onevision,
-        assemble_qwen,
-    )
-
-    # Centralised dispatch — keeps the canonical family-name set in one
-    # place so callers get a clear ``ValueError`` listing valid options on
-    # a typo (e.g. "qwen2_5_vl") instead of the older
-    # ``NotImplementedError`` which was indistinguishable from "support
-    # not yet wired up". When adding a new family, register it here.
-    dispatch = {
-        VLMFamily.QWEN_VL.value: assemble_qwen,
-        VLMFamily.LLAVA_NEXT.value: assemble_llava_next,
-        VLMFamily.LLAVA_ONEVISION.value: assemble_llava_onevision,
-        VLMFamily.INTERNVL2.value: assemble_internvl,
-    }
+    dispatch = _load_family_dispatch()
     fn = dispatch.get(family)
     if fn is None:
         raise ValueError(
-            f"Unknown family={family!r}; expected one of "
-            f"{sorted(dispatch)}."
+            f"Unknown family={family!r}; expected one of {sorted(dispatch)}."
         )
     return fn(
         user_prompt, trajectory, image, processor,

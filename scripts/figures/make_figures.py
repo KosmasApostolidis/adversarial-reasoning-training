@@ -18,6 +18,7 @@ import json
 import math
 import sys
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -118,41 +119,52 @@ def render_gates(t0: dict, t1: dict, out_path: Path) -> None:
     plt.close(fig)
 
 
-def render_robust_comparison(
-    baseline_per_sample: dict[str, list[float]],
+def _compute_robust_metric_deltas(
+    undefended_per_sample: dict[str, list[float]],
     defended_per_sample: dict[str, list[float]],
-    t3_payload: dict,
-    out_path: Path,
-) -> None:
-    """Render Δ = mean(defended) - mean(baseline) per T3 metric, with
-    stars on BH-FDR-significant metrics. Bars include 95% bootstrap CIs
-    on Δ to give a sense of effect size, not just p-value sign.
-    """
-    metrics = [
-        m
-        for m in ("tool_name_acc", "args_iou", "answer_em", "traj_edit_distance")
-        if m in baseline_per_sample and m in defended_per_sample
-    ]
-    significant = set(t3_payload.get("significant_metrics", []))
+    metrics: list[str],
+) -> tuple[list[float], list[float], list[float], list[int]]:
+    """Return (deltas, ci_lo, ci_hi, n_per_metric) for the requested metrics."""
     deltas: list[float] = []
     ci_lo: list[float] = []
     ci_hi: list[float] = []
     n_per_metric: list[int] = []
     for metric in metrics:
-        baseline = baseline_per_sample[metric]
+        undefended = undefended_per_sample[metric]
         defended = defended_per_sample[metric]
-        n = min(len(baseline), len(defended))
+        n = min(len(undefended), len(defended))
         n_per_metric.append(n)
         if n == 0:
             deltas.append(float("nan"))
             ci_lo.append(float("nan"))
             ci_hi.append(float("nan"))
             continue
-        per_sample_delta = [defended[i] - baseline[i] for i in range(n)]
-        mean_delta = sum(per_sample_delta) / n
-        deltas.append(mean_delta)
+        per_sample_delta = [defended[i] - undefended[i] for i in range(n)]
+        deltas.append(sum(per_sample_delta) / n)
         ci_lo.append(_bootstrap_ci(per_sample_delta, lo=True))
         ci_hi.append(_bootstrap_ci(per_sample_delta, lo=False))
+    return deltas, ci_lo, ci_hi, n_per_metric
+
+
+def render_robust_comparison(
+    undefended_per_sample: dict[str, list[float]],
+    defended_per_sample: dict[str, list[float]],
+    t3_payload: dict,
+    out_path: Path,
+) -> None:
+    """Render Δ = mean(defended) - mean(undefended) per T3 metric, with
+    stars on BH-FDR-significant metrics. Bars include 95% bootstrap CIs
+    on Δ to give a sense of effect size, not just p-value sign.
+    """
+    metrics = [
+        m
+        for m in ("tool_name_acc", "args_iou", "answer_em", "traj_edit_distance")
+        if m in undefended_per_sample and m in defended_per_sample
+    ]
+    significant = set(t3_payload.get("significant_metrics", []))
+    deltas, ci_lo, ci_hi, n_per_metric = _compute_robust_metric_deltas(
+        undefended_per_sample, defended_per_sample, metrics,
+    )
 
     fig, ax = plt.subplots(figsize=(7.0, 3.6))
     x = list(range(len(metrics)))
@@ -166,20 +178,16 @@ def render_robust_comparison(
             ax.text(
                 x[i],
                 deltas[i] + (yerr[1][i] if not math.isnan(yerr[1][i]) else 0.0) + 0.01,
-                "*",
-                ha="center",
-                va="bottom",
-                fontsize=14,
-                color="#cc4c02",
+                "*", ha="center", va="bottom", fontsize=14, color="#cc4c02",
             )
     ax.axhline(0.0, color="gray", linewidth=0.7)
     ax.set_xticks(x)
     ax.set_xticklabels(metrics, rotation=15, ha="right")
-    ax.set_ylabel("Δ = defended − baseline (similarity, higher is better)")
+    ax.set_ylabel("Δ = defended − undefended (similarity, higher is better)")
     n_total = max(n_per_metric) if n_per_metric else 0
     passed = bool(t3_payload.get("passed"))
     ax.set_title(
-        f"Robust-eval Δ vs undefended baseline — n={n_total} paired "
+        f"Robust-eval Δ vs undefended — n={n_total} paired "
         f"(samples × ε), T3 {'PASS' if passed else 'FAIL'}"
     )
     fig.tight_layout()
@@ -187,16 +195,19 @@ def render_robust_comparison(
     plt.close(fig)
 
 
-def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
-    """Headline figure: per-model Δ bars over T3 metrics with bootstrap CIs.
+def _load_aggregates_with_label(
+    aggregates: list[Path], *, flag_name: str, report_missing: bool,
+) -> tuple[list[tuple[str, dict]], list[Path]] | None:
+    """Load aggregate.json files, drop missing/corrupt, return (payloads, missing).
 
-    Each ``aggregates`` entry is one ``aggregate.json`` (one model).
-    Group label is the directory name minus the trailing ``_main`` suffix
-    so ``results/qwen_main/aggregate.json`` → ``qwen``.
+    Returns ``None`` if no usable payloads remain so callers can early-out
+    with a uniform error message. ``flag_name`` ("aggregate" / "compare") is
+    threaded into the missing-path warning so users know which CLI flag
+    triggered the load.
     """
     if not aggregates:
-        print("ERROR: --aggregate requires at least one path", file=sys.stderr)
-        return 1
+        print(f"ERROR: --{flag_name} requires at least one path", file=sys.stderr)
+        return None
     payloads: list[tuple[str, dict]] = []
     missing: list[Path] = []
     for path in aggregates:
@@ -206,7 +217,6 @@ def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
             continue
         agg = load_json_lenient(path)
         if agg is None:
-            # Corrupt JSON — load_json_lenient already logged the cause.
             missing.append(path)
             continue
         label = path.parent.name
@@ -218,54 +228,69 @@ def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
             f"ERROR: no aggregates available — all {len(aggregates)} paths missing",
             file=sys.stderr,
         )
-        return 1
-    if missing:
+        return None
+    if report_missing and missing:
         print(
             f"NOTE: rendering with {len(payloads)}/{len(aggregates)} models "
             f"(missing: {', '.join(str(p) for p in missing)})",
             file=sys.stderr,
         )
+    return payloads, missing
+
+
+def _gather_headline_bars(
+    payload: dict, metric_keys: list[str],
+) -> tuple[list[float], list[float], list[float]]:
+    """Pull (mean, lo_err, hi_err) lists for one model's summary row."""
+    summary = payload.get("summary", {})
+    means: list[float] = []
+    lo_err: list[float] = []
+    hi_err: list[float] = []
+    for key in metric_keys:
+        row = summary.get(key) or {}
+        mean = float(row.get("mean", float("nan")))
+        ci_lo = float(row.get("ci_lo", float("nan")))
+        ci_hi = float(row.get("ci_hi", float("nan")))
+        means.append(mean)
+        lo_err.append(0.0 if math.isnan(ci_lo) or math.isnan(mean) else max(0.0, mean - ci_lo))
+        hi_err.append(0.0 if math.isnan(ci_hi) or math.isnan(mean) else max(0.0, ci_hi - mean))
+    return means, lo_err, hi_err
+
+
+def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
+    """Headline figure: per-model Δ bars over T3 metrics with bootstrap CIs.
+
+    Each ``aggregates`` entry is one ``aggregate.json`` (one model).
+    Group label is the directory name minus the trailing ``_main`` suffix
+    so ``results/qwen_main/aggregate.json`` → ``qwen``.
+    """
+    loaded = _load_aggregates_with_label(
+        aggregates, flag_name="aggregate", report_missing=True,
+    )
+    if loaded is None:
+        return 1
+    payloads, _ = loaded
 
     metric_keys = [k for k, _ in HEADLINE_METRICS]
     metric_labels = [lab for _, lab in HEADLINE_METRICS]
-
     n_models = len(payloads)
     n_metrics = len(metric_keys)
     bar_w = 0.8 / max(1, n_models)
     fig, ax = plt.subplots(figsize=(max(7.0, 1.8 * n_metrics), 4.0))
-
     palette = ["#0b6efd", "#198754", "#dc3545", "#cc4c02", "#6f42c1"]
     for mi, (label, agg) in enumerate(payloads):
-        summary = agg.get("summary", {})
-        means: list[float] = []
-        lo_err: list[float] = []
-        hi_err: list[float] = []
-        for key in metric_keys:
-            row = summary.get(key) or {}
-            mean = float(row.get("mean", float("nan")))
-            ci_lo = float(row.get("ci_lo", float("nan")))
-            ci_hi = float(row.get("ci_hi", float("nan")))
-            means.append(mean)
-            lo_err.append(0.0 if math.isnan(ci_lo) or math.isnan(mean) else max(0.0, mean - ci_lo))
-            hi_err.append(0.0 if math.isnan(ci_hi) or math.isnan(mean) else max(0.0, ci_hi - mean))
+        means, lo_err, hi_err = _gather_headline_bars(agg, metric_keys)
         x = [j + (mi - (n_models - 1) / 2.0) * bar_w for j in range(n_metrics)]
         ax.bar(
-            x, means,
-            width=bar_w,
-            yerr=[lo_err, hi_err],
-            capsize=3,
-            label=label,
-            color=palette[mi % len(palette)],
-            alpha=0.85,
+            x, means, width=bar_w, yerr=[lo_err, hi_err], capsize=3,
+            label=label, color=palette[mi % len(palette)], alpha=0.85,
         )
 
     ax.axhline(0.0, color="gray", linewidth=0.7)
     ax.set_xticks(list(range(n_metrics)))
     ax.set_xticklabels(metric_labels, rotation=15, ha="right")
-    ax.set_ylabel("Δ = defended − baseline (mean ± 95% CI)")
-    ax.set_title(
-        f"Headline robustness gains — {n_models} model(s), seed-aggregated T3"
-    )
+    ax.set_ylabel("Δ = defended − undefended (mean ± 95% CI)")
+    ax.set_title(f"Headline robustness gains — {n_models} model(s), seed-aggregated T3")
     ax.legend(frameon=False, loc="best")
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,96 +300,94 @@ def render_headline_3model(aggregates: list[Path], out_path: Path) -> int:
     return 0
 
 
-def render_baseline_vs_defended(aggregates: list[Path], out_path: Path) -> int:
-    """Side-by-side baseline vs defended bars, one subplot per T3 metric."""
-    if not aggregates:
-        print("ERROR: --compare requires at least one path", file=sys.stderr)
-        return 1
-    payloads: list[tuple[str, dict]] = []
-    for path in aggregates:
-        if not path.exists():
-            print(f"WARN: missing aggregate (skipping): {path}", file=sys.stderr)
+_COMPARE_ROW = tuple[str, float, float, float, float, float, float]
+
+
+def _collect_compare_rows(
+    payloads: list[tuple[str, dict]], key: str,
+) -> list[_COMPARE_ROW]:
+    """Pull (label, bl_mean, df_mean, bl_lo_err, bl_hi_err, df_lo_err, df_hi_err)
+    rows for one metric across all model payloads. Skips rows missing data.
+    """
+    rows: list[_COMPARE_ROW] = []
+    for label, agg in payloads:
+        summary = agg.get("summary", {})
+        bl_row = summary.get(f"{key}_undefended_mean")
+        df_row = summary.get(f"{key}_defended_mean")
+        if not bl_row or not df_row:
             continue
-        agg = load_json_lenient(path)
-        if agg is None:
+        bl_mean = float(bl_row.get("mean", float("nan")))
+        df_mean = float(df_row.get("mean", float("nan")))
+        if math.isnan(bl_mean) or math.isnan(df_mean):
             continue
-        label = path.parent.name
-        if label.endswith("_main"):
-            label = label[:-5]
-        payloads.append((label, agg))
-    if not payloads:
-        print("ERROR: no aggregates available for comparison", file=sys.stderr)
+        bl_ci_lo = float(bl_row.get("ci_lo", float("nan")))
+        bl_ci_hi = float(bl_row.get("ci_hi", float("nan")))
+        df_ci_lo = float(df_row.get("ci_lo", float("nan")))
+        df_ci_hi = float(df_row.get("ci_hi", float("nan")))
+        rows.append((
+            label, bl_mean, df_mean,
+            max(0.0, bl_mean - bl_ci_lo) if not math.isnan(bl_ci_lo) else 0.0,
+            max(0.0, bl_ci_hi - bl_mean) if not math.isnan(bl_ci_hi) else 0.0,
+            max(0.0, df_mean - df_ci_lo) if not math.isnan(df_ci_lo) else 0.0,
+            max(0.0, df_ci_hi - df_mean) if not math.isnan(df_ci_hi) else 0.0,
+        ))
+    return rows
+
+
+def _draw_compare_subplot(
+    ax: Any, rows: list[_COMPARE_ROW], mlab: str, palette: dict[str, str],
+) -> None:
+    """Render one subplot of the undefended-vs-defended grid."""
+    if not rows:
+        ax.text(0.5, 0.5, "No T3 data", ha="center", va="center",
+                transform=ax.transAxes, color="gray")
+        ax.set_title(mlab)
+        return
+
+    n = len(rows)
+    x = list(range(n))
+    bar_w = 0.35
+    for offset, cond, color in [(-bar_w / 2, 1, palette["undefended"]),
+                                 (bar_w / 2, 2, palette["defended"])]:
+        means = [m[cond] for m in rows]
+        lo_err = [m[3] if cond == 1 else m[5] for m in rows]
+        hi_err = [m[4] if cond == 1 else m[6] for m in rows]
+        ax.bar(
+            [xi + offset for xi in x], means, width=bar_w,
+            yerr=[lo_err, hi_err], capsize=3, color=color, alpha=0.85,
+        )
+    ax.set_xticks(x)
+    ax.set_xticklabels([m[0] for m in rows])
+    ax.set_ylabel("score")
+    ax.set_ylim(0, 1.15)
+    ax.set_title(mlab)
+
+
+def render_undefended_vs_defended(aggregates: list[Path], out_path: Path) -> int:
+    """Side-by-side undefended vs defended bars, one subplot per T3 metric."""
+    loaded = _load_aggregates_with_label(
+        aggregates, flag_name="compare", report_missing=False,
+    )
+    if loaded is None:
         return 1
+    payloads, _ = loaded
 
     metric_keys = [k for k, _ in COMPARISON_METRICS]
     metric_labels = [lab for _, lab in COMPARISON_METRICS]
-    palette = {"baseline": "#6c757d", "defended": "#198754"}
+    palette = {"undefended": "#6c757d", "defended": "#198754"}
 
     fig, axes = plt.subplots(2, 2, figsize=(10, 7))
-    for mi, (ax, key, mlab) in enumerate(zip(axes.flat, metric_keys, metric_labels)):
-        models_with_data: list[tuple[str, float, float, float, float]] = []
-        for label, agg in payloads:
-            summary = agg.get("summary", {})
-            bl_key = f"{key}_baseline_mean"
-            df_key = f"{key}_defended_mean"
-            bl_row = summary.get(bl_key)
-            df_row = summary.get(df_key)
-            if not bl_row or not df_row:
-                continue
-            bl_mean = float(bl_row.get("mean", float("nan")))
-            df_mean = float(df_row.get("mean", float("nan")))
-            bl_ci_lo = float(bl_row.get("ci_lo", float("nan")))
-            bl_ci_hi = float(bl_row.get("ci_hi", float("nan")))
-            df_ci_lo = float(df_row.get("ci_lo", float("nan")))
-            df_ci_hi = float(df_row.get("ci_hi", float("nan")))
-            if math.isnan(bl_mean) or math.isnan(df_mean):
-                continue
-            models_with_data.append((
-                label, bl_mean, df_mean,
-                max(0.0, bl_mean - bl_ci_lo) if not math.isnan(bl_ci_lo) else 0.0,
-                max(0.0, bl_ci_hi - bl_mean) if not math.isnan(bl_ci_hi) else 0.0,
-                max(0.0, df_mean - df_ci_lo) if not math.isnan(df_ci_lo) else 0.0,
-                max(0.0, df_ci_hi - df_mean) if not math.isnan(df_ci_hi) else 0.0,
-            ))
+    for ax, key, mlab in zip(axes.flat, metric_keys, metric_labels):
+        rows = _collect_compare_rows(payloads, key)
+        _draw_compare_subplot(ax, rows, mlab, palette)
 
-        if not models_with_data:
-            ax.text(0.5, 0.5, "No T3 data", ha="center", va="center",
-                    transform=ax.transAxes, color="gray")
-            ax.set_title(mlab)
-            continue
-
-        n = len(models_with_data)
-        x = list(range(n))
-        bar_w = 0.35
-        for offset, cond, color in [(-bar_w / 2, 1, palette["baseline"]),
-                                      (bar_w / 2, 2, palette["defended"])]:
-            means = [m[cond] for m in models_with_data]
-            lo_err = [m[3] if cond == 1 else m[5] for m in models_with_data]
-            hi_err = [m[4] if cond == 1 else m[6] for m in models_with_data]
-            ax.bar(
-                [xi + offset for xi in x], means,
-                width=bar_w,
-                yerr=[lo_err, hi_err],
-                capsize=3,
-                color=color,
-                alpha=0.85,
-            )
-
-        ax.set_xticks(x)
-        ax.set_xticklabels([m[0] for m in models_with_data])
-        ax.set_ylabel("score")
-        ax.set_ylim(0, 1.15)
-        ax.set_title(mlab)
-
-    # Shared legend
     handles = [
-        Patch(facecolor=palette["baseline"], alpha=0.85, label="baseline"),
+        Patch(facecolor=palette["undefended"], alpha=0.85, label="undefended"),
         Patch(facecolor=palette["defended"], alpha=0.85, label="defended"),
     ]
     fig.legend(handles=handles, loc="lower center", ncol=2, frameon=False, fontsize=9)
-
     fig.suptitle(
-        "Adversarially trained vs baseline — per-model per-metric comparison",
+        "Adversarially trained vs undefended — per-model per-metric comparison",
         y=1.01, fontsize=12, fontweight="bold",
     )
     fig.tight_layout(rect=[0, 0.08, 1, 0.96])
@@ -407,6 +430,37 @@ def _bootstrap_ci(
     return means[idx]
 
 
+def _render_t3_per_run_figures(runs: Path, out_dir: Path) -> int:
+    """Render one fig05_robust_comparison_<run>.png per T3.json found.
+
+    Returns the number of figures written. Skips runs missing the paired
+    per-sample artifacts or with corrupt JSON.
+    """
+    n_figures = 0
+    for t3_path in sorted(runs.glob("*/gates/T3.json")):
+        gates_dir = t3_path.parent
+        undefended_path = gates_dir / "undefended_per_sample.json"
+        defended_path = gates_dir / "defended_per_sample.json"
+        if not (undefended_path.exists() and defended_path.exists()):
+            continue
+        run_name = gates_dir.parent.name
+        undefended_ps = load_json_lenient(undefended_path)
+        defended_ps = load_json_lenient(defended_path)
+        t3_payload = load_json_lenient(t3_path)
+        if undefended_ps is None or defended_ps is None or t3_payload is None:
+            print(
+                f"WARN: skipping {run_name} (corrupt per-sample/T3 JSON)",
+                file=sys.stderr,
+            )
+            continue
+        render_robust_comparison(
+            undefended_ps, defended_ps, t3_payload,
+            out_dir / f"fig05_robust_comparison_{run_name}.png",
+        )
+        n_figures += 1
+    return n_figures
+
+
 def render_legacy(runs: Path, out_dir: Path) -> int:
     t0_path = runs / "t0" / "gates" / "T0.json"
     t1_path = runs / "t1" / "gates" / "T1.json"
@@ -424,35 +478,11 @@ def render_legacy(runs: Path, out_dir: Path) -> int:
     t0 = load_json_lenient(t0_path)
     t1 = load_json_lenient(t1_path)
     if t0 is None or t1 is None:
-        print(
-            f"ERROR: corrupt T0/T1 JSON; cannot render gates summary",
-            file=sys.stderr,
-        )
+        print("ERROR: corrupt T0/T1 JSON; cannot render gates summary", file=sys.stderr)
         return 1
 
     render_gates(t0, t1, out_dir / "fig04_gates_summary.png")
-
-    n_figures = 1
-    robust_t3_paths = sorted(runs.glob("*/gates/T3.json"))
-    for t3_path in robust_t3_paths:
-        gates_dir = t3_path.parent
-        baseline_path = gates_dir / "baseline_per_sample.json"
-        defended_path = gates_dir / "defended_per_sample.json"
-        if not (baseline_path.exists() and defended_path.exists()):
-            continue
-        run_name = gates_dir.parent.name
-        baseline_ps = load_json_lenient(baseline_path)
-        defended_ps = load_json_lenient(defended_path)
-        t3_payload = load_json_lenient(t3_path)
-        if baseline_ps is None or defended_ps is None or t3_payload is None:
-            print(
-                f"WARN: skipping {run_name} (corrupt per-sample/T3 JSON)",
-                file=sys.stderr,
-            )
-            continue
-        out_path = out_dir / f"fig05_robust_comparison_{run_name}.png"
-        render_robust_comparison(baseline_ps, defended_ps, t3_payload, out_path)
-        n_figures += 1
+    n_figures = 1 + _render_t3_per_run_figures(runs, out_dir)
 
     print(f"wrote {n_figures} figures to {out_dir}")
     for p in sorted(out_dir.glob("*.png")):
@@ -472,7 +502,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--compare", type=Path, nargs="+", default=None,
-        help="aggregate.json file(s) → render baseline-vs-defended comparison to --out.",
+        help="aggregate.json file(s) → render undefended-vs-defended comparison to --out.",
     )
     p.add_argument(
         "--out", type=Path, default=None,
@@ -496,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.out is None:
             print("ERROR: --compare requires --out", file=sys.stderr)
             return 2
-        return render_baseline_vs_defended(args.compare, args.out)
+        return render_undefended_vs_defended(args.compare, args.out)
     if args.aggregate:
         if args.out is None:
             print("ERROR: --aggregate requires --out", file=sys.stderr)

@@ -110,14 +110,13 @@ class _NanInjectingTrainer(AdvTrainer):
         )
 
 
-@pytest.mark.unit
-def test_trainer_skips_nan_and_continues(tmp_path: Path) -> None:
-    torch.manual_seed(0)
-    vocab, T = 16, 8
+def _build_nan_injecting_trainer(
+    *, tmp_path: Path, vocab: int, nan_at: int,
+) -> _NanInjectingTrainer:
+    """Build a _NanInjectingTrainer with the trainer config shared by this test."""
     model = _StubModel(vocab=vocab)
     vlm = _StubVLM(model)
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
-
     cfg = TrainerConfig(
         epochs=1,
         grad_accum=1,
@@ -129,12 +128,11 @@ def test_trainer_skips_nan_and_continues(tmp_path: Path) -> None:
         run_dir=tmp_path,
     )
 
-    # Loss-fn callable not used by the override but required by ctor.
     def _unused_loss(*_a, **_kw):  # pragma: no cover
         raise AssertionError("override should bypass loss_fn")
 
-    trainer = _NanInjectingTrainer(
-        nan_at=2,
+    return _NanInjectingTrainer(
+        nan_at=nan_at,
         vlm=vlm,
         model=model,
         collator=_identity_collate,  # type: ignore[arg-type]
@@ -145,8 +143,13 @@ def test_trainer_skips_nan_and_continues(tmp_path: Path) -> None:
         device="cpu",
     )
 
-    ds = _DS(n=4, vocab=vocab, T=T)
-    trainer.fit(ds)
+
+@pytest.mark.unit
+def test_trainer_skips_nan_and_continues(tmp_path: Path) -> None:
+    torch.manual_seed(0)
+    vocab, T = 16, 8
+    trainer = _build_nan_injecting_trainer(tmp_path=tmp_path, vocab=vocab, nan_at=2)
+    trainer.fit(_DS(n=4, vocab=vocab, T=T))
 
     # Inspect the JSONL training log for the skipped event.
     log_path = tmp_path / "train_log.jsonl"

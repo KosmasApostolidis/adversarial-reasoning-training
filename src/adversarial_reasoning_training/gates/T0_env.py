@@ -165,6 +165,33 @@ def _t0_forward_backward(
     return loss_out
 
 
+def _finalize_t0(
+    *,
+    loss_out: Any,
+    model: torch.nn.Module,
+    peak_memory_limit_gb: float,
+    duration_s: float,
+) -> T0Result:
+    """Collect grad norms + peak memory, evaluate verdict, build result record."""
+    grad_norms = _collect_role_grad_norms(model)
+    peak_gb = current_memory_stats().peak_allocated_gb
+    passed, notes = _evaluate_t0_verdict(
+        loss_total=loss_out.total,
+        grad_norms=grad_norms,
+        peak_gb=peak_gb,
+        peak_memory_limit_gb=peak_memory_limit_gb,
+    )
+    return _build_t0_result(
+        passed=passed,
+        loss_out=loss_out,
+        grad_norms=grad_norms,
+        peak_gb=peak_gb,
+        peak_memory_limit_gb=peak_memory_limit_gb,
+        duration_s=duration_s,
+        notes=notes,
+    )
+
+
 def run_t0(
     *,
     vlm: Any,
@@ -189,7 +216,6 @@ def run_t0(
     device_t = torch.device(device)
     start = time.time()
     reset_peak_memory()
-    notes: list[str] = []
 
     model.train(False)
     batch, x_adv, loss_fn = _run_t0_attack(
@@ -199,26 +225,10 @@ def run_t0(
     loss_out = _t0_forward_backward(
         vlm, model, batch, x_adv, loss_fn, device_t, amp_dtype,
     )
-
-    grad_norms = _collect_role_grad_norms(model)
-    peak_gb = current_memory_stats().peak_allocated_gb
-
-    passed, verdict_notes = _evaluate_t0_verdict(
-        loss_total=loss_out.total,
-        grad_norms=grad_norms,
-        peak_gb=peak_gb,
-        peak_memory_limit_gb=peak_memory_limit_gb,
-    )
-    notes.extend(verdict_notes)
-
-    result = _build_t0_result(
-        passed=passed,
-        loss_out=loss_out,
-        grad_norms=grad_norms,
-        peak_gb=peak_gb,
+    result = _finalize_t0(
+        loss_out=loss_out, model=model,
         peak_memory_limit_gb=peak_memory_limit_gb,
         duration_s=time.time() - start,
-        notes=notes,
     )
     write_gate_result(out_path, result.to_dict())
     return result

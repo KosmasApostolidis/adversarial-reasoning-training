@@ -119,25 +119,18 @@ def _events(tmp_path: Path) -> list[dict]:
     return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
 
 
-@pytest.mark.unit
-def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
-    """C1: 5 micro-batches, grad_accum=4, 2 epochs.
-
-    Without epoch-end drain only ONE optimizer step per epoch fires
-    (at micro_idx=3); micro_idx=4 calls .backward() but never
-    .step(), and its grads leak into epoch 2's first window.
-
-    With the fix: every epoch flushes the tail, so 2 steps per epoch
-    → 4 total.
+def _build_scripted_trainer(
+    *, tmp_path: Path, vocab: int, epochs: int = 1, nan_at: int | None = None,
+) -> _ScriptedTrainer:
+    """Construct a _ScriptedTrainer with grad_accum=4 + the rest of the
+    fixed trainer config shared by every test in this module.
     """
-    torch.manual_seed(0)
-    vocab, T = 16, 8
     model = _StubModel(vocab=vocab)
     vlm = _StubVLM(model)
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
 
     cfg = TrainerConfig(
-        epochs=2,
+        epochs=epochs,
         grad_accum=4,
         log_every=1,
         eval_every=0,
@@ -151,7 +144,8 @@ def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
     def _unused_loss(*_a, **_kw):  # pragma: no cover
         raise AssertionError("override should bypass loss_fn")
 
-    trainer = _ScriptedTrainer(
+    return _ScriptedTrainer(
+        nan_at=nan_at,
         vlm=vlm,
         model=model,
         collator=_identity_collate,  # type: ignore[arg-type]
@@ -162,8 +156,22 @@ def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
         device="cpu",
     )
 
-    ds = _DS(n=5, vocab=vocab, T=T)
-    trainer.fit(ds)
+
+@pytest.mark.unit
+def test_partial_window_at_epoch_end_is_drained(tmp_path: Path) -> None:
+    """C1: 5 micro-batches, grad_accum=4, 2 epochs.
+
+    Without epoch-end drain only ONE optimizer step per epoch fires
+    (at micro_idx=3); micro_idx=4 calls .backward() but never
+    .step(), and its grads leak into epoch 2's first window.
+
+    With the fix: every epoch flushes the tail, so 2 steps per epoch
+    → 4 total.
+    """
+    torch.manual_seed(0)
+    vocab, T = 16, 8
+    trainer = _build_scripted_trainer(tmp_path=tmp_path, vocab=vocab, epochs=2)
+    trainer.fit(_DS(n=5, vocab=vocab, T=T))
 
     events = _events(tmp_path)
     fit_done = next(e for e in events if e["event"] == "fit_done")
@@ -193,36 +201,7 @@ def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
     """
     torch.manual_seed(0)
     vocab, T = 16, 8
-    model = _StubModel(vocab=vocab)
-    vlm = _StubVLM(model)
-    optimizer = torch.optim.SGD(model.parameters(), lr=1e-2)
-
-    cfg = TrainerConfig(
-        epochs=1,
-        grad_accum=4,
-        log_every=1,
-        eval_every=0,
-        save_every=0,
-        grad_clip_norm=1.0,
-        amp_dtype="fp32",
-        run_dir=tmp_path,
-        final_save_include_optimizer=False,
-    )
-
-    def _unused_loss(*_a, **_kw):  # pragma: no cover
-        raise AssertionError("override should bypass loss_fn")
-
-    trainer = _ScriptedTrainer(
-        nan_at=2,
-        vlm=vlm,
-        model=model,
-        collator=_identity_collate,  # type: ignore[arg-type]
-        loss_fn=_unused_loss,  # type: ignore[arg-type]
-        optimizer=optimizer,
-        scheduler=None,
-        config=cfg,
-        device="cpu",
-    )
+    trainer = _build_scripted_trainer(tmp_path=tmp_path, vocab=vocab, nan_at=2)
 
     ds = _DS(n=8, vocab=vocab, T=T)
     trainer.fit(ds)
@@ -249,7 +228,5 @@ def test_nan_skip_does_not_underscale_window(tmp_path: Path) -> None:
         f"reset, not silently shrink); got accum_count={first['accum_count']}"
     )
     # avg_loss must equal accum_loss_sum / accum_count, not / grad_accum.
-    # We can't recompute the exact loss without rerunning forward, but
-    # we CAN assert it's finite and within the realistic CE range.
     assert torch.isfinite(torch.tensor(first["avg_loss"])).item()
     assert 0.0 < first["avg_loss"] < 50.0
