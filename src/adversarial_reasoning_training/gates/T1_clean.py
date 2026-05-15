@@ -116,6 +116,34 @@ def _compute_t1_verdict(
     return passed, tool_acc, answer_em, notes
 
 
+def _build_t1_result(
+    *,
+    passed: bool,
+    tool_acc: float,
+    answer_em: float,
+    loss_final: float,
+    step: int,
+    duration_s: float,
+    thresholds: T1Thresholds,
+    notes: list[str],
+) -> T1Result:
+    """Assemble the T1Result record from gathered metrics + thresholds."""
+    return T1Result(
+        passed=passed,
+        tool_name_acc=tool_acc,
+        answer_em=answer_em,
+        train_loss_final=loss_final,
+        steps=step,
+        duration_s=duration_s,
+        thresholds={
+            "tool_name_acc_min": thresholds.tool_name_acc_min,
+            "answer_em_min": thresholds.answer_em_min,
+            "max_steps": thresholds.max_steps,
+        },
+        notes=notes,
+    )
+
+
 def run_t1(
     *,
     vlm: Any,
@@ -153,20 +181,10 @@ def run_t1(
         metrics=metrics, thresholds=thresholds,
         tool_name_metric=tool_name_metric, answer_em_metric=answer_em_metric,
     )
-
-    result = T1Result(
-        passed=passed,
-        tool_name_acc=tool_acc,
-        answer_em=answer_em,
-        train_loss_final=loss_final,
-        steps=step,
-        duration_s=time.time() - start,
-        thresholds={
-            "tool_name_acc_min": thresholds.tool_name_acc_min,
-            "answer_em_min": thresholds.answer_em_min,
-            "max_steps": thresholds.max_steps,
-        },
-        notes=notes,
+    result = _build_t1_result(
+        passed=passed, tool_acc=tool_acc, answer_em=answer_em,
+        loss_final=loss_final, step=step, duration_s=time.time() - start,
+        thresholds=thresholds, notes=notes,
     )
     write_gate_result(out_path, result.to_dict())
     return result
