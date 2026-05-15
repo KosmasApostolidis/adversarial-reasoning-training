@@ -5,7 +5,7 @@
 #   pgd_at  : L = task_ce(adv)
 #   oaat    : L = alpha * task_ce(clean) + (1-alpha) * task_ce(adv)
 
-defense: pgd_at             # trades | pgd_at | oaat
+defense: oaat               # trades | pgd_at | oaat
 seed: 0
 
 epochs: 8                   # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..8)
