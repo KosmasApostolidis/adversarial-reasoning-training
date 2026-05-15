@@ -17,10 +17,9 @@ import torch
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
 from PIL import Image
 
-from ..mask import build_masks, labels_from_input_ids
 from ..segments import DEFAULT_MASK_WEIGHTS, MaskWeights, Segment, SegmentKind
 from ..teacher_force import TeacherForcedBatch, _format_observation, _split_thoughts
-from ._common import IM_END, IM_START
+from ._common import IM_END, IM_START, pack_teacher_forced_batch
 
 INTERNVL_IMG_START = "<img>"
 INTERNVL_IMG_END = "</img>"
@@ -246,21 +245,7 @@ def assemble_internvl(
     if not ids:
         raise ValueError("assemble_internvl produced zero tokens; empty trajectory?")
 
-    input_ids = torch.tensor([ids], dtype=torch.long)
-    segment_ids = torch.tensor([seg], dtype=torch.long)
-    attention_mask = torch.ones_like(input_ids)
-    task_mask, traj_mask = build_masks(segment_ids, weights)
-    labels = labels_from_input_ids(input_ids, task_mask)
-
-    forward_kwargs["attention_mask"] = attention_mask
-
-    return TeacherForcedBatch(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        segment_ids=segment_ids,
-        task_mask=task_mask,
-        traj_mask=traj_mask,
-        labels=labels,
-        forward_kwargs=forward_kwargs,
-        segments=segments,
+    return pack_teacher_forced_batch(
+        ids=ids, seg=seg, segments=segments,
+        forward_kwargs=forward_kwargs, weights=weights,
     )
