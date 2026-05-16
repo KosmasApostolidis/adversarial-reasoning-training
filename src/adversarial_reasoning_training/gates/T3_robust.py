@@ -40,6 +40,24 @@ class T3Thresholds:
         "answer_em",
         "traj_edit_distance",
     )
+    # Per-metric Wilcoxon alternative. ``greater`` if defended > undefended
+    # is the win condition (accuracy / similarity), ``less`` if smaller is
+    # better, ``two-sided`` only when direction is genuinely unknown. All
+    # four default metrics are higher-is-better in this codebase so the
+    # default is ``greater``. A two-sided test bleeds half the power into
+    # the wrong tail and inflates T3 false-negatives.
+    directions: dict[str, str] | None = None
+
+    def direction_for(self, key: str) -> str:
+        defaults = {
+            "tool_name_acc": "greater",
+            "args_iou": "greater",
+            "answer_em": "greater",
+            "traj_edit_distance": "greater",
+        }
+        if self.directions and key in self.directions:
+            return self.directions[key]
+        return defaults.get(key, "two-sided")
 
 
 @dataclass
@@ -62,9 +80,17 @@ class T3Result:
 
 
 def _wilcoxon_signed_rank(
-    undefended: Sequence[float], defended: Sequence[float]
+    undefended: Sequence[float],
+    defended: Sequence[float],
+    *,
+    alternative: str = "greater",
 ) -> tuple[float, float]:
-    """Two-sided Wilcoxon signed-rank test returning (statistic, p).
+    """Wilcoxon signed-rank test returning (statistic, p).
+
+    ``alternative`` is one of ``greater`` / ``less`` / ``two-sided``.
+    Pass the metric's natural improvement direction so the test has
+    power against the alternative we actually care about — a two-sided
+    test bleeds half the power into the wrong tail.
 
     Uses scipy if available, otherwise returns (nan, 1.0) and lets the
     caller log the fallback.
@@ -82,7 +108,7 @@ def _wilcoxon_signed_rank(
     if not nonzero:
         return 0.0, 1.0
     try:
-        stat, p = wilcoxon(nonzero, alternative="two-sided")
+        stat, p = wilcoxon(nonzero, alternative=alternative)
     except ValueError:
         logger.warning(
             "scipy.stats.wilcoxon rejected the input "
@@ -116,7 +142,7 @@ def _bh_fdr(pvalues: list[float], alpha: float) -> list[bool]:
 def _compute_metric_deltas(
     undefended_per_sample: dict[str, list[float]],
     defended_per_sample: dict[str, list[float]],
-    metrics: tuple[str, ...],
+    thresholds: T3Thresholds,
 ) -> tuple[dict[str, dict[str, float]], list[float], list[str], list[str]]:
     """Compute per-metric stats, p-values, and collect skip notes."""
     per_metric: dict[str, dict[str, float]] = {}
@@ -124,7 +150,7 @@ def _compute_metric_deltas(
     metric_keys: list[str] = []
     notes: list[str] = []
 
-    for key in metrics:
+    for key in thresholds.metrics:
         undefended_samples = undefended_per_sample.get(key, [])
         defended_samples = defended_per_sample.get(key, [])
         if (
@@ -138,13 +164,17 @@ def _compute_metric_deltas(
             di - bi
             for bi, di in zip(undefended_samples, defended_samples, strict=False)
         ) / len(undefended_samples)
-        stat, p = _wilcoxon_signed_rank(undefended_samples, defended_samples)
+        alt = thresholds.direction_for(key)
+        stat, p = _wilcoxon_signed_rank(
+            undefended_samples, defended_samples, alternative=alt,
+        )
         per_metric[key] = {
             "undefended_mean": sum(undefended_samples) / len(undefended_samples),
             "defended_mean": sum(defended_samples) / len(defended_samples),
             "delta_mean": mean_delta,
             "wilcoxon_stat": stat,
             "p_value": p,
+            "wilcoxon_alternative": alt,
             "n": len(undefended_samples),
         }
         pvalues.append(p)
@@ -235,7 +265,7 @@ def run_t3(
     start = time.time()
 
     per_metric, pvalues, metric_keys, pre_notes = _compute_metric_deltas(
-        undefended_per_sample, defended_per_sample, thresholds.metrics,
+        undefended_per_sample, defended_per_sample, thresholds,
     )
     notes: list[str] = list(pre_notes)
     significant = _apply_bh_fdr(

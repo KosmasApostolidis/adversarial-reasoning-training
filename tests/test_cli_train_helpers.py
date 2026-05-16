@@ -25,7 +25,7 @@ from adversarial_reasoning_training.utils.constants import (
 @pytest.mark.unit
 def test_build_trainer_config_passes_through_pgd_block(tmp_path: Path) -> None:
     """defenses.yaml ``pgd`` block must be threaded into TrainerConfig."""
-    args = Namespace(run_dir=tmp_path)
+    args = Namespace(run_dir=tmp_path, seed=0)
     train_cfg = {
         "epochs": 4,
         "grad_accum": 8,
@@ -61,7 +61,7 @@ def test_build_trainer_config_defaults_when_pgd_missing(tmp_path: Path) -> None:
     """Empty defenses.yaml ``pgd`` falls back to module constants — the
     pre-refactor inline literal was ``EPS_4_255 / DEFAULT_PGD_ALPHA_RATIO``.
     """
-    args = Namespace(run_dir=tmp_path)
+    args = Namespace(run_dir=tmp_path, seed=0)
     train_cfg = {"epochs": 1, "grad_accum": 1}
     defense_cfg = {"pgd": {}}
     cfg = _build_trainer_config(args, train_cfg, defense_cfg)
@@ -75,7 +75,7 @@ def test_build_trainer_config_defaults_when_pgd_missing(tmp_path: Path) -> None:
 
 @pytest.mark.unit
 def test_build_trainer_config_respects_final_save_optimizer_override(tmp_path: Path) -> None:
-    args = Namespace(run_dir=tmp_path)
+    args = Namespace(run_dir=tmp_path, seed=0)
     train_cfg = {
         "epochs": 1,
         "grad_accum": 1,

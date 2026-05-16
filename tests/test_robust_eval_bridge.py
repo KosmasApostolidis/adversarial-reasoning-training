@@ -266,7 +266,7 @@ def test_t3_pass_end_to_end_under_clean_robustness(tmp_path: Path) -> None:
 
     out_path = tmp_path / "T3.json"
     result = run_t3(
-        baseline_per_sample=baseline_ps,
+        undefended_per_sample=baseline_ps,
         defended_per_sample=defended_ps,
         out_path=out_path,
         thresholds=T3Thresholds(

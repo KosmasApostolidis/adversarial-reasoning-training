@@ -82,7 +82,7 @@ def test_t3_passes_with_clear_robustness_gain(tmp_path) -> None:
     }
     out = tmp_path / "T3.json"
     result = run_t3(
-        baseline_per_sample=baseline,
+        undefended_per_sample=baseline,
         defended_per_sample=defended,
         out_path=out,
         thresholds=T3Thresholds(min_traj_edit_delta=0.10, alpha=0.05),
