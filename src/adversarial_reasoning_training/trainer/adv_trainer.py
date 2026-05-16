@@ -51,6 +51,13 @@ class TrainerConfig:
     default_epsilon: float = EPS_4_255
     alpha_ratio: float = DEFAULT_PGD_ALPHA_RATIO
     pgd_steps: int = 7
+    pgd_random_restarts: int = 1
+    # Seed for the train DataLoader RNG (controls shuffle order). Threaded
+    # from ``--seed`` so a re-run with the same seed observes identical
+    # mini-batch ordering. Without this, even a fully seeded torch / numpy
+    # / random still ships a non-deterministic DataLoader because torch
+    # falls back to a fresh entropy source.
+    loader_seed: int = 0
     run_dir: Path = Path("runs/default")
     final_save_include_optimizer: bool = True
 
@@ -163,7 +170,7 @@ class AdvTrainer:
             epsilon=epsilon,
             alpha_ratio=self.config.alpha_ratio,
             steps=self.config.pgd_steps,
-            random_restarts=1,
+            random_restarts=self.config.pgd_random_restarts,
         )
         pixel_values = batch.forward_kwargs["pixel_values"].to(self.device)
 
@@ -532,7 +539,12 @@ class AdvTrainer:
         meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 
     def fit(self, dataset: Dataset) -> None:
-        loader = DataLoader(dataset, batch_size=1, shuffle=True, collate_fn=self.collator)
+        loader_gen = torch.Generator()
+        loader_gen.manual_seed(int(self.config.loader_seed))
+        loader = DataLoader(
+            dataset, batch_size=1, shuffle=True,
+            collate_fn=self.collator, generator=loader_gen,
+        )
         total_outer = len(loader) * self.config.epochs
         self._global_step = 0
         self._accum_loss_acc = 0.0
