@@ -159,11 +159,27 @@ def _apply_bh_fdr(
     metric_keys: list[str],
     alpha: float,
 ) -> list[str]:
-    """Annotate per_metric with BH-FDR rejections; return significant keys."""
+    """Annotate per_metric with BH-FDR rejections; return significant keys.
+
+    Directional: a metric counts as ``significant_bh`` only when (a) the
+    two-sided Wilcoxon test rejects under BH-FDR AND (b) the defense moved
+    the metric in the *improvement* direction (``delta_mean >= 0`` for the
+    four T3 metrics, all of which are "higher = better" similarity scores).
+
+    Pre-fix (B05) this stripped the directional check, so a defense that
+    significantly *degraded* tool_name_acc / args_iou / answer_em counted
+    toward the ``min_significant_metrics`` floor and the gate passed.
+    """
     rejected = _bh_fdr(pvalues, alpha)
+    significant: list[str] = []
     for key, rej in zip(metric_keys, rejected, strict=False):
-        per_metric[key]["significant_bh"] = bool(rej)
-    return [k for k, r in zip(metric_keys, rejected, strict=False) if r]
+        delta = float(per_metric[key].get("delta_mean", float("nan")))
+        improved = math.isfinite(delta) and delta >= 0.0
+        is_sig = bool(rej and improved)
+        per_metric[key]["significant_bh"] = is_sig
+        if is_sig:
+            significant.append(key)
+    return significant
 
 
 def _compute_t3_verdict(
