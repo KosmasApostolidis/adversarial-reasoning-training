@@ -138,7 +138,12 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer | None = None,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
-    payload = torch.load(path, map_location=map_location)
+    # ``weights_only=False`` is explicit: payload includes optimizer state
+    # (nested objects rejected by the safe loader). PyTorch 2.6 flipped the
+    # default to True; without this kwarg, the next upgrade silently breaks
+    # resume. Loading is restricted to local trusted checkpoints written by
+    # ``CheckpointRegistry.save``.
+    payload = torch.load(path, map_location=map_location, weights_only=False)
     model.load_state_dict(payload["model_state_dict"], strict=False)
     if optimizer is not None and "optim_state_dict" in payload:
         optimizer.load_state_dict(payload["optim_state_dict"])
