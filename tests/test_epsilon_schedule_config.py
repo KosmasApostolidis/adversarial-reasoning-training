@@ -52,6 +52,35 @@ def test_validate_rejects_bad_range_shape() -> None:
 
 
 @pytest.mark.unit
+def test_validate_rejects_non_numeric_eps() -> None:
+    """``eps: "0.01"`` (quoted) used to slip past validation, then crash
+    mid-epoch inside ``PGDAttack`` with an unsupported-operand TypeError
+    when ``alpha = eps * alpha_ratio`` was attempted. Surface the typing
+    failure at startup with an actionable message."""
+    schedule = [{"epoch_range": [1, 2], "eps": "0.01"}]
+    with pytest.raises(ValueError, match="numeric"):
+        validate_eps_schedule(schedule)
+
+
+@pytest.mark.unit
+def test_validate_accepts_int_eps() -> None:
+    """0 / 1 are legal ints that yaml may emit unquoted (e.g. ``eps: 0``).
+    Accept both ints and floats; only string / None / bool should fail."""
+    schedule = [{"epoch_range": [1, 2], "eps": 0}]
+    validate_eps_schedule(schedule)
+
+
+@pytest.mark.unit
+def test_validate_rejects_bool_eps() -> None:
+    """``bool`` is an ``int`` subclass in Python; explicitly reject so a
+    YAML ``eps: true`` (which yaml.safe_load returns as ``True``) doesn't
+    silently coerce to ``1.0`` ε. Saves an operator from a baffling run."""
+    schedule = [{"epoch_range": [1, 2], "eps": True}]
+    with pytest.raises(ValueError, match="numeric"):
+        validate_eps_schedule(schedule)
+
+
+@pytest.mark.unit
 def test_epsilon_for_epoch_skips_malformed_entry_safely() -> None:
     # If a malformed entry slips past validation (e.g. user constructs the
     # schedule programmatically), ``epsilon_for_epoch`` must skip rather
