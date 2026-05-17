@@ -167,8 +167,16 @@ class AdvTrainer:
         )
         pixel_values = batch.forward_kwargs["pixel_values"].to(self.device)
 
+        # Switch to eval mode for the PGD craft so dropout / BN do not perturb
+        # the deterministic forward the attacker needs, then restore the prior
+        # mode before the OUTER forward+backward. Pre-fix this never restored,
+        # so the entire adv-FT run executed in eval mode (dropout disabled).
+        was_training = self.model.training
         self.model.train(False)
-        attack_result = run_inner_pgd(self.vlm, pixel_values, batch, inner_cfg)
+        try:
+            attack_result = run_inner_pgd(self.vlm, pixel_values, batch, inner_cfg)
+        finally:
+            self.model.train(was_training)
         x_adv = attack_result.perturbed_image.detach().to(self.device)
         if x_adv.ndim == 3:
             x_adv = x_adv.unsqueeze(0)
