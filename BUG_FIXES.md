@@ -1,24 +1,32 @@
 # Bug Fixes — Phase 3 Report
 
-Phase 2 of the bug-hunt mandate applied all 11 approved fixes (B01–B11). Each fix is a single commit with TDD-driven test coverage and a behaviour-preservation contract documented in the commit body.
+Phase 2 of the bug-hunt mandate applied 11 approved fixes (B01–B11). Each surviving fix is a single commit with TDD-driven test coverage and a behaviour-preservation contract documented in the commit body.
 
-## Aggregate
+## Post-merge reconciliation with main (PR #25)
+
+Three of the 11 fixes (B05, B07, B08) were superseded by independently-developed stronger fixes that landed on `main` while this branch was in flight. To avoid duplicate / contradictory contracts, our versions were dropped at merge time. Surviving from this branch: **8 fixes** (B01, B02, B03, B04, B06, B09, B10, B11).
+
+| Superseded fix | Replaced by (`main`) | Why main's is better |
+|---|---|---|
+| B05 — directional `significant_bh` flag (post-hoc two-sided filter) | per-metric one-sided Wilcoxon (`alternative="greater"`) | Cleaner statistics — directional gating baked into the test, no post-hoc filter needed |
+| B07 — drop in-process `PYTHONHASHSEED` assignment | Keep + add `CUBLAS_WORKSPACE_CONFIG` setdefault | Finding was wrong — DataLoader workers spawned later inherit the env var at startup, so the assignment IS meaningful |
+| B08 — explicit `weights_only=False` | `weights_only=True` + atomic save + strict-match audit | Genuinely stronger: restricts the deserialiser, atomic rename prevents half-written ckpts, key-budget audit fails loud on architecture mismatch |
+
+The two B05 unit tests (`test_t3_fails_when_defense_significantly_degrades_metrics`, `test_t3_directional_check_counts_only_positive_deltas`) were kept and re-targeted — they verify the directional-gating *contract*, which holds under either implementation strategy.
+
+## Aggregate (post-merge)
 
 | Metric | Value |
 |---|---|
 | Findings opened in `BUG_HUNT.md` | 11 |
 | Findings approved for Phase 2 | 11 (B01–B11) |
-| Fixes shipped | 11 |
-| Commits | 11 (one per fix) |
-| New tests added | 20 |
-| Existing tests modified | 1 (`test_seed.py::test_seed_everything_sets_pythonhashseed` replaced by `test_seed_everything_does_not_touch_pythonhashseed` — the prior test pinned down B07's buggy no-op behaviour) |
+| Fixes surviving merge | 8 (B01, B02, B03, B04, B06, B09, B10, B11) |
+| Fixes superseded by `main` | 3 (B05, B07, B08) |
+| Commits surviving merge | 8 + 1 docs |
+| New tests surviving | 16 |
+| Existing tests modified | 0 |
 | Existing tests weakened | 0 |
-| Pre-existing test failures retained as-is | 2 (`test_ablation_schemas.py`, unrelated to this hunt — see "Out of scope" below) |
-| Full suite excluding those 2 failures | 370 passed |
-
-By class: correctness 4, numerical-reproducibility 2, API-contract 3, domain/statistical 1, resource/security-adjacent 1.
-
-By severity: 7 HIGH-confidence, 3 HIGH-impact-MED-confidence, 1 LOW-impact / latent.
+| Full suite | 370 passed (deselecting `test_ablation_schemas.py` pre-existing failures) |
 
 ---
 
@@ -60,14 +68,9 @@ By severity: 7 HIGH-confidence, 3 HIGH-impact-MED-confidence, 1 LOW-impact / lat
 - **Behaviour preservation:** Finite-loss batches reach `backward()` and the existing accumulation/step flow unchanged — the guard is a strict subset of the prior code path. Only behavioural change: a NaN micro-batch no longer poisons subsequent steps; instead it is dropped (matching `task_ce`'s own documented expectation that "the trainer's finite-loss guard skips" the degenerate case).
 - **Verification:** Test constructs a degenerate batch (all-zero `task_mask` → `task_ce` returns `sum/0 = nan` per its existing contract), invokes `_t1_train_step` directly, asserts (a) returned `loss_val` is NaN, (b) model weights bit-identical before/after, (c) step counter unchanged, (d) micro counter reset to 0.
 
-### B05 — Directional `significant_bh` in T3 robust gate
+### B05 — SUPERSEDED by main
 
-- **Commit:** `fe4be21`
-- **Files touched:** `src/adversarial_reasoning_training/gates/T3_robust.py`
-- **Tests added:** 2 in `tests/test_gates.py` — `test_t3_fails_when_defense_significantly_degrades_metrics`, `test_t3_directional_check_counts_only_positive_deltas`.
-- **What changed:** `_apply_bh_fdr` now sets `per_metric[key]["significant_bh"] = bool(rej and delta_mean >= 0)`. The two-sided Wilcoxon stays so the published `p_value` field reads as the familiar symmetric test of "any change", but a metric only counts toward `min_significant_metrics` when the directional improvement check also holds. All four T3 metrics are "higher = better" similarity scores, so the `>= 0` convention is uniform across the family.
-- **Behaviour preservation:** **This is a semantic change to a published-results gate** — operator approved this fix explicitly before the commit. Pre-fix T3.json entries from past runs remain readable; only the boolean flag flips for the "significant but degraded" case, which the gate previously passed incorrectly. The existing `test_t3_passes_with_clear_robustness_gain` continues to pass (the clear-improvement fixture's deltas are all positive).
-- **Verification:** The new `test_t3_fails_when_defense_significantly_degrades_metrics` reproduces the exact BUG_HUNT scenario: defense drops tool_name_acc / args_iou / answer_em by 0.4 each (significant under Wilcoxon at n=30) while keeping `traj_edit_distance` inside the `-min_traj_edit_delta` bound. Pre-fix: `passed=True` (the gate's semantic was inverted). Post-fix: `passed=False`, and each degraded metric is flagged `significant_bh=False`.
+See "Post-merge reconciliation" above. Main switched T3 to per-metric one-sided Wilcoxon, which subsumes the directional `significant_bh` filter. The two regression tests added under B05 were kept (re-targeted to verify the directional-gating *contract*).
 
 ### B10 — Type-check `eps` in `validate_eps_schedule`
 
@@ -96,23 +99,13 @@ By severity: 7 HIGH-confidence, 3 HIGH-impact-MED-confidence, 1 LOW-impact / lat
 - **Behaviour preservation:** `int(float("3"))` == `int("3")` == 3, so the integer-string path is bit-identical. The only behavioural delta is dotted-float canonicalising int→int instead of int→float, which is the fix.
 - **Verification:** Parametrised over `"3"`, `"3.0"`, `"3.00"`, `" 3 "` — all yield `int 3`. All four other `load_metadata_csv_*` tests continue to pass.
 
-### B08 — Explicit `weights_only=False` in `load_checkpoint`
+### B08 — SUPERSEDED by main
 
-- **Commit:** `(see `git log`)`
-- **File touched:** `src/adversarial_reasoning_training/trainer/ckpt.py`
-- **Test added:** `tests/test_ckpt_rotation.py::test_load_checkpoint_passes_weights_only_false`.
-- **What changed:** `torch.load(path, map_location=...)` → `torch.load(path, map_location=..., weights_only=False)`. The PyTorch 2.4 release emitted a FutureWarning on this default; 2.6 flipped it to `True`. Our payload contains the optimizer state_dict whose nested objects the safe loader rejects, so the next torch upgrade would silently break resume mid-run. The two existing `scripts/` loaders already pass the kwarg explicitly; this brings the trainer's loader into line.
-- **Behaviour preservation:** PT < 2.6 default for this call shape was already `False`. PT ≥ 2.6 would have raised at load time; we now stay forward-compatible. Trusted-local-checkpoint loading is unchanged.
-- **Verification:** Spy via `monkeypatch.setattr` on `torch.load` captures kwargs and asserts `weights_only is False`. Other three rotation tests continue to pass.
+Main's PR #25 took the opposite tack — `weights_only=True` + atomic save + strict-match audit — which is a strictly stronger safety contract. Our weaker explicit-False fix was dropped at merge.
 
-### B07 — Drop in-process `PYTHONHASHSEED` assignment
+### B07 — SUPERSEDED by main
 
-- **Commit:** `(see `git log`)`
-- **Files touched:** `src/adversarial_reasoning_training/utils/seed.py`, `tests/test_seed.py`
-- **Test modified:** `test_seed_everything_sets_pythonhashseed` (which pinned the buggy no-op) → `test_seed_everything_does_not_touch_pythonhashseed` (regression test that the misleading line cannot return).
-- **What changed:** Removed `os.environ["PYTHONHASHSEED"] = str(seed)`. Python's hash randomization is locked in at interpreter startup, so the in-process assignment was a no-op that created false confidence in hash-stable dict / set iteration. Docstring now points operators to pin it via the shell launcher if needed.
-- **Behaviour preservation:** The four RNG-determinism tests (Python, NumPy, torch CPU, cuDNN flags) continue to pass — actual seeding is untouched. The companion `os` import in `seed.py` is removed (orphaned by the line removal); `os` is retained in the test module for `os.environ` introspection.
-- **Verification:** Suite full pass.
+Main retains the in-process `PYTHONHASHSEED` assignment because DataLoader workers spawned later inherit the env at startup. Our removal would have broken that subprocess-inheritance path. Main additionally adds `CUBLAS_WORKSPACE_CONFIG` for full deterministic-algorithms compatibility on H200.
 
 ### B06 — T0 verdict is now freeze-aware per role
 

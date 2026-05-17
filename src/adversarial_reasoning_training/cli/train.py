@@ -67,9 +67,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # default of 0 silently overrode `training.seed: N` from YAML.
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
-        "--models-yaml", type=Path,
-        default=Path("../adversarial-reasoning-attacks/configs/models.yaml"),
-        help="Path to attacks-repo models.yaml",
+        "--models-yaml", type=Path, required=True,
+        help="Path to attacks-repo models.yaml (no default; the cross-repo "
+        "path is environment-dependent).",
     )
     return parser
 
@@ -160,6 +160,8 @@ def _build_trainer_config(
         default_epsilon=pgd_cfg.get("default_eps", EPS_4_255),
         alpha_ratio=pgd_cfg.get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
         pgd_steps=pgd_cfg.get("steps", 7),
+        pgd_random_restarts=int(pgd_cfg.get("random_restarts", 1)),
+        loader_seed=int(args.seed),
         run_dir=args.run_dir,
         final_save_include_optimizer=train_cfg.get(
             "final_save_include_optimizer", True

@@ -91,13 +91,12 @@ def test_t3_passes_with_clear_robustness_gain(tmp_path) -> None:
 
 
 def test_t3_fails_when_defense_significantly_degrades_metrics(tmp_path) -> None:
-    """B05 regression: pre-fix the gate used a two-sided Wilcoxon and
-    counted ANY significant change as "significant_bh", so a defense that
-    significantly *worsened* tool_name_acc / args_iou / answer_em while
-    keeping traj_edit_distance within the directional bound passed T3.
-    The directional fix must flip this case to a failure: significant
-    degradation does not count toward the min-significant-metrics threshold.
-    """
+    """T3 must FAIL when the defense significantly worsens accuracy
+    metrics. Under the one-sided ``greater`` Wilcoxon (T3 default),
+    a defended < undefended sample yields a high p-value, so no
+    metric reaches ``significant_bh`` and the min-significant floor
+    is missed → verdict fails. Confirms directional gating regardless
+    of two-sided vs one-sided implementation strategy."""
     n = 30
     # Defense moves every per-metric value DOWN by 0.4 (clearly significant
     # under Wilcoxon at n=30) while traj_edit_distance stays inside the
@@ -134,9 +133,11 @@ def test_t3_fails_when_defense_significantly_degrades_metrics(tmp_path) -> None:
 
 
 def test_t3_directional_check_counts_only_positive_deltas(tmp_path) -> None:
-    """Three metrics with significant positive deltas + one with significant
-    negative delta. Only the three positive-delta metrics count, so a 3-of-4
-    pass criterion still holds. Verifies the count uses the directional flag."""
+    """Three metrics with significant positive deltas + one with negative
+    delta. Only the three positive-delta metrics count under one-sided
+    ``greater`` Wilcoxon, so a 3-of-4 pass criterion still holds. Verifies
+    directional gating against ``significant_metrics`` and per-metric
+    ``significant_bh`` flag."""
     n = 30
     undefended = {
         "tool_name_acc": [0.30] * n,

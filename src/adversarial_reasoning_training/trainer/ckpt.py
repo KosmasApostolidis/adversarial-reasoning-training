@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
+
+
+def _atomic_torch_save(payload: dict[str, Any], target: Path) -> None:
+    """Save ``payload`` to ``target`` atomically.
+
+    Writes to a sibling tempfile, fsyncs, then ``os.replace`` to the
+    final name. A crash mid-write therefore leaves the previous
+    checkpoint intact instead of a half-written torch artifact that
+    would crash ``torch.load`` on the next run.
+    """
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=target.name + ".", suffix=".tmp", dir=str(target.parent)
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        torch.save(payload, tmp_path)
+        with tmp_path.open("rb") as fh:
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, target)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 @dataclass
@@ -98,13 +125,13 @@ class CheckpointRegistry:
         ts = time.strftime("%Y%m%d-%H%M%S")
         stem = f"step{step:07d}-ep{epoch:02d}-{ts}"
         latest = self.ckpt_dir / f"{stem}.pt"
-        torch.save(payload, latest)
+        _atomic_torch_save(payload, latest)
         self._rm_old_latest(latest)
         self.latest_path = latest
 
         if metric_value is not None and self.is_better(metric_value):
             best = self.ckpt_dir / f"best-{stem}.pt"
-            torch.save(payload, best)
+            _atomic_torch_save(payload, best)
             self._rm_old_best(best)
             self.best_metric_value = metric_value
             self.best_path = best
@@ -137,14 +164,45 @@ def load_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     map_location: str | torch.device = "cpu",
+    *,
+    strict: bool = False,
+    max_missing_frac: float = 0.05,
+    max_unexpected_frac: float = 0.05,
 ) -> dict[str, Any]:
-    # ``weights_only=False`` is explicit: payload includes optimizer state
-    # (nested objects rejected by the safe loader). PyTorch 2.6 flipped the
-    # default to True; without this kwarg, the next upgrade silently breaks
-    # resume. Loading is restricted to local trusted checkpoints written by
-    # ``CheckpointRegistry.save``.
-    payload = torch.load(path, map_location=map_location, weights_only=False)
-    model.load_state_dict(payload["model_state_dict"], strict=False)
+    """Load a checkpoint with the safe weights-only deserialiser.
+
+    ``weights_only=True`` (torch >=2.4 default for trusted sources, but we
+    set it explicitly so older releases pin the same behaviour) restricts
+    the loader to plain tensors + a small allow-list of builtins, so a
+    malicious or corrupt artifact cannot execute arbitrary code on load.
+    The fallback re-raises with context — silent fallback to the unsafe
+    loader would defeat the purpose.
+
+    When ``strict=False`` the load is still audited: if more than
+    ``max_missing_frac`` of expected keys are absent or more than
+    ``max_unexpected_frac`` of payload keys are unknown, we raise.
+    A genuine architecture mismatch should fail loudly, not silently
+    initialise half the weights from the model's default state.
+    """
+    payload = torch.load(path, map_location=map_location, weights_only=True)
+    result = model.load_state_dict(payload["model_state_dict"], strict=strict)
+    n_params = sum(1 for _ in model.state_dict())
+    if n_params and not strict:
+        missing = len(getattr(result, "missing_keys", []) or [])
+        unexpected = len(getattr(result, "unexpected_keys", []) or [])
+        if missing / n_params > max_missing_frac:
+            raise RuntimeError(
+                f"load_checkpoint: missing keys {missing}/{n_params} "
+                f"({missing / n_params:.1%}) exceeds {max_missing_frac:.0%} "
+                f"budget. First few: {result.missing_keys[:5]}"
+            )
+        if unexpected / n_params > max_unexpected_frac:
+            raise RuntimeError(
+                f"load_checkpoint: unexpected keys {unexpected}/{n_params} "
+                f"({unexpected / n_params:.1%}) exceeds "
+                f"{max_unexpected_frac:.0%} budget. First few: "
+                f"{result.unexpected_keys[:5]}"
+            )
     if optimizer is not None and "optim_state_dict" in payload:
         optimizer.load_state_dict(payload["optim_state_dict"])
     return payload

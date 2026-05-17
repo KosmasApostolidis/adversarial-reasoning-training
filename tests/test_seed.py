@@ -35,21 +35,13 @@ def test_seed_everything_different_seeds_diverge() -> None:
     assert a != b
 
 
-def test_seed_everything_does_not_touch_pythonhashseed(
-    monkeypatch,
-) -> None:
-    """B07: pre-fix ``seed_everything`` assigned ``PYTHONHASHSEED`` in-process,
-    but Python's hash randomization is locked in at interpreter startup —
-    the assignment was a no-op that misled readers into thinking hash-stable
-    dict iteration was guaranteed. Removed; this regression test asserts
-    the env var is left alone so the false-confidence line cannot return.
-    """
-    monkeypatch.delenv("PYTHONHASHSEED", raising=False)
+def test_seed_everything_sets_pythonhashseed() -> None:
+    """``PYTHONHASHSEED`` is set in-process so DataLoader workers spawned
+    later (which read the env at startup) inherit a hash-stable seed.
+    The assignment is a no-op for the parent process's own hash table
+    but is meaningful for any subprocess that inherits the env."""
     seed_everything(123, deterministic=False)
-    assert "PYTHONHASHSEED" not in os.environ, (
-        "seed_everything must not set PYTHONHASHSEED — it's a no-op "
-        "after interpreter startup and gives false determinism guarantees."
-    )
+    assert os.environ["PYTHONHASHSEED"] == "123"
 
 
 def test_seed_everything_deterministic_flag_flips_cudnn() -> None:

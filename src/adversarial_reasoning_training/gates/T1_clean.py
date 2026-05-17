@@ -160,6 +160,7 @@ def run_t1(
     grad_accum: int = 8,
     tool_name_metric: str = "tool_name_acc",
     answer_em_metric: str = "answer_em",
+    loader_seed: int = 0,
 ) -> T1Result:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     device_t = torch.device(device)
@@ -169,7 +170,12 @@ def run_t1(
     # Grads still flow under eval mode (dropout/BN stay frozen); matches the
     # adv_trainer convention.
     model.train(False)
-    loader = DataLoader(train_ds, batch_size=1, shuffle=True, collate_fn=collator)
+    loader_gen = torch.Generator()
+    loader_gen.manual_seed(int(loader_seed))
+    loader = DataLoader(
+        train_ds, batch_size=1, shuffle=True,
+        collate_fn=collator, generator=loader_gen,
+    )
     step, loss_final = _run_t1_training_loop(
         vlm=vlm, model=model, loader=loader, optimizer=optimizer,
         scheduler=scheduler, max_steps=thresholds.max_steps, device=device_t,

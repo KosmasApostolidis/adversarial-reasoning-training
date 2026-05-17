@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import random
 
 import numpy as np
 import torch
 
 
-def seed_everything(seed: int, *, deterministic: bool = True) -> None:
+def seed_everything(
+    seed: int,
+    *,
+    deterministic: bool = True,
+    warn_only: bool = False,
+) -> None:
     """Seed all RNGs relevant to this pipeline.
 
     Parameters
@@ -17,17 +23,20 @@ def seed_everything(seed: int, *, deterministic: bool = True) -> None:
         RNG seed applied to Python, NumPy, and PyTorch (CPU + CUDA).
     deterministic : bool
         If True, flip CuDNN / PyTorch flags to favor determinism over speed.
-        Some ops still have non-deterministic CUDA kernels; this only
-        reduces, not eliminates, nondeterminism.
-
-    Notes
-    -----
-    PYTHONHASHSEED is intentionally NOT set here: Python's hash
-    randomization is locked in at interpreter startup, so any
-    in-process assignment is a no-op that misleads readers. Pin it
-    via the shell (``PYTHONHASHSEED=0 python -m ...``) or
-    ``scripts/run_pipeline.sh`` if you need hash-stable dict iteration.
+    warn_only : bool
+        Passed through to ``torch.use_deterministic_algorithms``. Default
+        ``False`` is publication-grade — any op without a deterministic
+        kernel under the seed raises instead of silently falling back to
+        a non-deterministic one (which would invalidate seed-replication
+        claims in T1/T3 reports). Set ``True`` for smoke runs that
+        accept best-effort determinism.
     """
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    # cuBLAS needs an explicit workspace-config hint to keep matmul
+    # outputs deterministic across kernel selection. Without it,
+    # ``torch.use_deterministic_algorithms(True)`` raises on the first
+    # backward pass on H200. ``setdefault`` so an operator override wins.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -48,6 +57,6 @@ def seed_everything(seed: int, *, deterministic: bool = True) -> None:
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
         try:
-            torch.use_deterministic_algorithms(True, warn_only=True)
+            torch.use_deterministic_algorithms(True, warn_only=warn_only)
         except (AttributeError, RuntimeError):
             pass
