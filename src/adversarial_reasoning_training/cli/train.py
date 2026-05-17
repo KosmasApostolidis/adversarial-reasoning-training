@@ -61,13 +61,29 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", type=str, required=True, help="model family id")
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--seed", type=int, default=0)
+    # Default `None` (not 0) so the run honours the validated `training.seed`
+    # YAML key when the operator does not pass --seed. The pipeline always
+    # supplies --seed per-run, so its behaviour is unchanged. Pre-fix the CLI
+    # default of 0 silently overrode `training.seed: N` from YAML.
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--models-yaml", type=Path,
         default=Path("../adversarial-reasoning-attacks/configs/models.yaml"),
         help="Path to attacks-repo models.yaml",
     )
     return parser
+
+
+def _resolve_seed(args: argparse.Namespace, train_cfg: dict[str, Any]) -> int:
+    """Pick the seed for ``setup_seed``: CLI override beats YAML.
+
+    ``--seed`` defaults to ``None``; when omitted, fall back to the
+    schema-required ``training.seed`` YAML key. Pre-fix, the CLI default of
+    0 silently overrode whatever ``training.seed`` declared.
+    """
+    if args.seed is not None:
+        return int(args.seed)
+    return int(train_cfg["seed"])
 
 
 def _load_and_validate_configs(
@@ -145,9 +161,11 @@ def _build_trainer_config(
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    setup_seed(args.seed)
-
     train_cfg, defense_cfg, data_cfg, gold_cfg, ft_cfg = _load_and_validate_configs(args)
+    # Seed only AFTER validation so YAML's ``training.seed`` is reachable;
+    # pre-fix this ran ``setup_seed(args.seed)`` before validation, which
+    # silently used the CLI default of 0 whenever the operator omitted --seed.
+    setup_seed(_resolve_seed(args, train_cfg))
 
     vlm = _build_vlm(args.model, args.models_yaml)
     model = vlm.model

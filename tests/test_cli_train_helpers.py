@@ -14,7 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from adversarial_reasoning_training.cli.train import _build_trainer_config
+from adversarial_reasoning_training.cli.train import (
+    _build_trainer_config,
+    _resolve_seed,
+)
 from adversarial_reasoning_training.trainer.adv_trainer import TrainerConfig
 from adversarial_reasoning_training.utils.constants import (
     DEFAULT_PGD_ALPHA_RATIO,
@@ -84,3 +87,25 @@ def test_build_trainer_config_respects_final_save_optimizer_override(tmp_path: P
     defense_cfg = {"pgd": {}}
     cfg = _build_trainer_config(args, train_cfg, defense_cfg)
     assert cfg.final_save_include_optimizer is False
+
+
+@pytest.mark.unit
+def test_resolve_seed_uses_train_cfg_when_cli_unset() -> None:
+    """No --seed on CLI ⇒ honour validated YAML ``seed:`` value."""
+    args = Namespace(seed=None)
+    assert _resolve_seed(args, {"seed": 7}) == 7
+
+
+@pytest.mark.unit
+def test_resolve_seed_cli_overrides_train_cfg() -> None:
+    """Explicit --seed beats YAML so pipeline per-seed runs continue to work."""
+    args = Namespace(seed=3)
+    assert _resolve_seed(args, {"seed": 7}) == 3
+
+
+@pytest.mark.unit
+def test_resolve_seed_missing_train_cfg_key_raises() -> None:
+    """Schema requires ``seed``; reaching the helper without it is a bug."""
+    args = Namespace(seed=None)
+    with pytest.raises(KeyError):
+        _resolve_seed(args, {})
