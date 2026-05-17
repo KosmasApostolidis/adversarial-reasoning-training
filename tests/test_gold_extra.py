@@ -217,6 +217,33 @@ def test_load_metadata_csv_tolerates_unparseable_numeric(tmp_path: Path) -> None
     assert md["s1"]["pi_rads"] == "not-a-number"
 
 
+@pytest.mark.parametrize(
+    "raw_value",
+    ["3", "3.0", "3.00", " 3 "],
+)
+def test_load_metadata_csv_pi_rads_canonical_int(
+    tmp_path: Path, raw_value: str
+) -> None:
+    """B09: pi_rads is a discrete clinical score (1-5). Pre-fix the ternary
+    ``float(...) if "." in str(md[k]) ... else int(...)`` returned ``3.0``
+    for ``pi_rads="3.0"`` because the dot is in the string — but downstream
+    template selection, JSON serialisation, and metadata equality checks
+    assume integer canonical form. Coerce via ``int(float(...))`` so all
+    parseable spellings yield the same ``int`` value.
+    """
+    csv_path = tmp_path / "meta.csv"
+    csv_path.write_text(
+        f"sample_id,pi_rads\ns1,{raw_value}\n",
+        encoding="utf-8",
+    )
+    md = load_metadata_csv(csv_path)
+    assert md["s1"]["pi_rads"] == 3
+    assert isinstance(md["s1"]["pi_rads"], int), (
+        f"pi_rads from {raw_value!r} must canonicalise to int, "
+        f"got {type(md['s1']['pi_rads']).__name__}"
+    )
+
+
 # -------------------- expert_probe round-trip --------------------
 
 
