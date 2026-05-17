@@ -113,11 +113,19 @@ def _build_optim_and_schedule(
     train_cfg: dict[str, Any],
     train_ds_size: int,
 ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler | None]:
+    # ``weight_decay`` and ``betas`` are validated as legal optional YAML
+    # keys (cli/schema.py:79-80) but pre-fix this builder ignored both,
+    # silently using the OptimConfig dataclass defaults. Thread them so a
+    # YAML-declared regularization regime is honoured. Mirror the pattern
+    # already used by gates/T1_clean.py:_build_t1_optimization.
+    betas = train_cfg.get("betas", list(OptimConfig.betas))
     optim_cfg = OptimConfig(
         kind=train_cfg.get("optim", "adamw8bit"),
         lr_lm=train_cfg["lr"]["lm"],
         lr_projector=train_cfg["lr"]["projector"],
         lr_vit=train_cfg["lr"]["vit"],
+        weight_decay=float(train_cfg.get("weight_decay", OptimConfig.weight_decay)),
+        betas=(float(betas[0]), float(betas[1])),
     )
     optimizer = build_optimizer(model, optim_cfg)
     total_steps = train_cfg["epochs"] * max(
