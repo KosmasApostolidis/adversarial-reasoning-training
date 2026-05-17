@@ -128,3 +128,31 @@ def test_build_scheduler_cosine_midpoint_is_half_base() -> None:
         sched.step()
     assert _step_lr(sched) == pytest.approx(base_lr * 0.5, rel=0.05)
     _ = math  # silence unused warning if test trimmed in future
+
+
+def test_build_scheduler_warmup_pct_zero_starts_at_base_lr() -> None:
+    """B11: ``warmup_pct=0.0`` must actually disable warmup. Pre-fix
+    ``warmup_steps = max(1, ...)`` forced a single zero-LR warmup step so
+    the operator could never opt out of warmup. With the clamp removed,
+    step 0 lambda returns the decay function at progress=0 → 1.0.
+    """
+    model = _RoleStubModel()
+    opt = build_optimizer(model, OptimConfig(kind="adamw"))
+    base_lr = opt.param_groups[0]["lr"]
+    sched = build_scheduler(
+        opt, ScheduleConfig(total_steps=100, warmup_pct=0.0, kind="constant")
+    )
+    # Step 0 effective lr must equal base_lr, not 0.
+    assert _step_lr(sched) == pytest.approx(base_lr, rel=1e-6)
+
+
+def test_build_scheduler_warmup_pct_nonzero_still_starts_at_zero() -> None:
+    """Behaviour preservation: when warmup IS requested, step 0 lambda
+    is ``step/warmup_steps == 0`` exactly as before — the B11 fix only
+    affects the ``warmup_pct=0`` opt-out path."""
+    model = _RoleStubModel()
+    opt = build_optimizer(model, OptimConfig(kind="adamw"))
+    sched = build_scheduler(
+        opt, ScheduleConfig(total_steps=100, warmup_pct=0.1, kind="cosine")
+    )
+    assert _step_lr(sched) == pytest.approx(0.0, abs=1e-9)

@@ -133,6 +133,17 @@ def validate_eps_schedule(schedule: list[dict[str, Any]] | None) -> None:
                 f"eps_schedule[{i}].epoch_range must be a 2-element list, "
                 f"got {epoch_range!r}."
             )
+        # Reject non-numeric eps at startup. Pre-fix a quoted ``eps: "0.01"``
+        # slipped past validation and crashed mid-attack inside
+        # ``PGDAttack`` when ``alpha = eps * alpha_ratio`` was attempted.
+        # ``bool`` is an ``int`` subclass — explicitly excluded so
+        # ``eps: true`` (yaml.safe_load → ``True``) cannot coerce to 1.0 ε.
+        eps_val = entry["eps"]
+        if isinstance(eps_val, bool) or not isinstance(eps_val, (int, float)):
+            raise ValueError(
+                f"eps_schedule[{i}].eps must be numeric, got "
+                f"{type(eps_val).__name__}: {eps_val!r}"
+            )
 
 
 def epsilon_for_epoch(

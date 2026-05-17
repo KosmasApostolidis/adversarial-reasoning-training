@@ -315,6 +315,16 @@ def _t1_train_step(
         logits = _clean_forward(vlm, batch, device)
         loss = task_ce(logits, batch.input_ids, batch.task_mask)
 
+    # Mirror AdvTrainer._run_epoch's NaN-skip semantics (adv_trainer.py:460-462):
+    # task_ce deliberately returns NaN on degenerate batches (e.g. all-zero
+    # task_mask from a truncation that dropped the answer span). Without this
+    # guard, NaN propagates through backward + optimizer.step and poisons
+    # every subsequent micro-batch — gate fails on metrics with no obvious
+    # cause in the log.
+    if not torch.isfinite(loss).item():
+        optimizer.zero_grad(set_to_none=True)
+        return step, 0, float("nan")
+
     (loss / grad_accum).backward()
     micro += 1
     loss_val = float("nan")

@@ -82,12 +82,15 @@ _DECAY_BY_KIND: dict[str, Callable[[float], float]] = {
 def build_scheduler(
     optimizer: torch.optim.Optimizer, cfg: ScheduleConfig
 ) -> torch.optim.lr_scheduler._LRScheduler:
-    warmup_steps = max(1, math.ceil(cfg.warmup_pct * cfg.total_steps))
+    # Pre-fix ``max(1, ...)`` forced a single zero-LR warmup step even when
+    # the operator set ``warmup_pct=0`` to opt out of warmup entirely; the
+    # first iteration silently trained at lr=0 with no way to disable it.
+    warmup_steps = max(0, math.ceil(cfg.warmup_pct * cfg.total_steps))
     decay_fn = _DECAY_BY_KIND.get(cfg.kind, _constant_decay)
 
     def lr_lambda(step: int) -> float:
-        if step < warmup_steps:
-            return step / max(1, warmup_steps)
+        if warmup_steps > 0 and step < warmup_steps:
+            return step / warmup_steps
         progress = (step - warmup_steps) / max(1, cfg.total_steps - warmup_steps)
         return decay_fn(progress)
 

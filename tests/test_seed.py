@@ -36,6 +36,10 @@ def test_seed_everything_different_seeds_diverge() -> None:
 
 
 def test_seed_everything_sets_pythonhashseed() -> None:
+    """``PYTHONHASHSEED`` is set in-process so DataLoader workers spawned
+    later (which read the env at startup) inherit a hash-stable seed.
+    The assignment is a no-op for the parent process's own hash table
+    but is meaningful for any subprocess that inherits the env."""
     seed_everything(123, deterministic=False)
     assert os.environ["PYTHONHASHSEED"] == "123"
 

@@ -65,12 +65,21 @@ def load_metadata_csv(path: str | Path) -> dict[str, dict[str, Any]]:
 
 
 def _coerce_metadata(row: dict[str, Any]) -> dict[str, Any]:
-    """Best-effort numeric coercion for known-numeric fields."""
+    """Best-effort numeric coercion for known-numeric fields.
+
+    ``pi_rads`` is a discrete clinical score (1-5) and must canonicalise
+    to ``int``. Pre-fix a ternary keyed on the literal ``"." in str(...)``
+    silently produced ``3.0`` for CSV values like ``pi_rads=3.0``, which
+    poisoned JSON serialisation and any equality check expecting an int.
+    """
     md = dict(row)
     for k in ("pi_rads", "psa", "psa_density", "lesion_size_mm", "volume_cc"):
         if k in md and md[k] not in (None, ""):
             try:
-                md[k] = float(md[k]) if "." in str(md[k]) or k != "pi_rads" else int(md[k])
+                if k == "pi_rads":
+                    md[k] = int(float(md[k]))
+                else:
+                    md[k] = float(md[k])
             except ValueError:
                 pass
     return md
