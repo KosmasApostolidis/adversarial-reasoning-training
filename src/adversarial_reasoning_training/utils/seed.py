@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import random
 
 import numpy as np
@@ -20,8 +19,15 @@ def seed_everything(seed: int, *, deterministic: bool = True) -> None:
         If True, flip CuDNN / PyTorch flags to favor determinism over speed.
         Some ops still have non-deterministic CUDA kernels; this only
         reduces, not eliminates, nondeterminism.
+
+    Notes
+    -----
+    PYTHONHASHSEED is intentionally NOT set here: Python's hash
+    randomization is locked in at interpreter startup, so any
+    in-process assignment is a no-op that misleads readers. Pin it
+    via the shell (``PYTHONHASHSEED=0 python -m ...``) or
+    ``scripts/run_pipeline.sh`` if you need hash-stable dict iteration.
     """
-    os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
