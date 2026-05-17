@@ -71,10 +71,6 @@ class _RoleGradNorms:
     projector: float
     lm: float
 
-    @property
-    def all_zero(self) -> bool:
-        return self.vit == 0.0 and self.projector == 0.0 and self.lm == 0.0
-
 
 def _collect_role_grad_norms(model: torch.nn.Module) -> _RoleGradNorms:
     return _RoleGradNorms(
@@ -84,21 +80,63 @@ def _collect_role_grad_norms(model: torch.nn.Module) -> _RoleGradNorms:
     )
 
 
+_ROLE_PATTERNS: dict[str, tuple[str, ...]] = {
+    "vit": _VIT_PATTERNS,
+    "projector": _PROJECTOR_PATTERNS,
+    "lm": _LM_PATTERNS,
+}
+
+
+def _trainable_roles(model: torch.nn.Module) -> frozenset[str]:
+    """Roles whose pattern matches at least one trainable parameter.
+
+    Used by ``_evaluate_t0_verdict`` to make the per-role grad check
+    freeze-aware: a role that was intentionally frozen by the freeze
+    strategy is exempt from the "grad must be non-zero" invariant.
+    """
+    trainable: set[str] = set()
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        for role, patterns in _ROLE_PATTERNS.items():
+            if any(tag in name for tag in patterns):
+                trainable.add(role)
+    return frozenset(trainable)
+
+
 def _evaluate_t0_verdict(
     *,
     loss_total: torch.Tensor,
     grad_norms: _RoleGradNorms,
     peak_gb: float,
     peak_memory_limit_gb: float,
+    trainable_roles: frozenset[str],
 ) -> tuple[bool, list[str]]:
+    """B06: per-role grad check is freeze-aware. Pre-fix the verdict only
+    failed when ``all_zero`` held — but a real freeze-strategy regression
+    typically severs ONE subgraph while the other two roles still receive
+    grads, so the gate silently passed. Now each trainable role must
+    receive a non-zero gradient; frozen roles are exempt."""
     notes: list[str] = []
     passed = True
     if not torch.isfinite(loss_total).item():
         passed = False
         notes.append("loss is NaN or Inf")
-    if grad_norms.all_zero:
+    grad_by_role = {
+        "vit": grad_norms.vit,
+        "projector": grad_norms.projector,
+        "lm": grad_norms.lm,
+    }
+    severed = sorted(
+        role for role in trainable_roles
+        if grad_by_role.get(role, 0.0) == 0.0
+    )
+    if severed:
         passed = False
-        notes.append("no gradient reached any role group")
+        notes.append(
+            "trainable role(s) received no gradient (subgraph disconnected): "
+            + ", ".join(severed)
+        )
     if peak_gb > peak_memory_limit_gb:
         passed = False
         notes.append(
@@ -180,6 +218,7 @@ def _finalize_t0(
         grad_norms=grad_norms,
         peak_gb=peak_gb,
         peak_memory_limit_gb=peak_memory_limit_gb,
+        trainable_roles=_trainable_roles(model),
     )
     return _build_t0_result(
         passed=passed,
