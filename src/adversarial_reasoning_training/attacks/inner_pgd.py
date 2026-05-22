@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from adversarial_reasoning.attacks.apgd import APGDAttack
 from adversarial_reasoning.attacks.base import AttackResult
 from adversarial_reasoning.attacks.pgd import PGDAttack
 
@@ -32,6 +33,9 @@ class InnerPgdConfig:
     alpha_ratio: float = DEFAULT_PGD_ALPHA_RATIO
     steps: int = 7
     random_restarts: int = 1
+    attack_mode: str = "pgd"
+    momentum: float = 0.75
+    rho: float = 0.75
 
 
 def _split_prompt_target(
@@ -70,14 +74,24 @@ def run_inner_pgd(
     the pixel domain (attacks-repo design note).
     """
     prompt_tokens, target_tokens, _ = _split_prompt_target(batch)
-    attack = PGDAttack(
-        name="pgd_linf_inner",
-        epsilon=config.epsilon,
-        alpha=config.epsilon * config.alpha_ratio,
-        steps=config.steps,
-        random_restarts=config.random_restarts,
-        targeted=False,
-    )
+    if config.attack_mode == "apgd":
+        attack = APGDAttack(
+            epsilon=config.epsilon,
+            steps=config.steps,
+            random_restarts=config.random_restarts,
+            momentum=config.momentum,
+            rho=config.rho,
+            targeted=False,
+        )
+    else:
+        attack = PGDAttack(
+            name="pgd_linf_inner",
+            epsilon=config.epsilon,
+            alpha=config.epsilon * config.alpha_ratio,
+            steps=config.steps,
+            random_restarts=config.random_restarts,
+            targeted=False,
+        )
     # Strip pixel_values from forward_kwargs: attacks-repo PGDAttack passes
     # `image` positionally to vlm.forward_with_logits, so including
     # pixel_values in kwargs would double-pass the visual input.
