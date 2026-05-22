@@ -525,13 +525,12 @@ run_one_model() {
         --split          test \
         --max-steps      8 \
         --pgd-steps      100 \
-        --restarts       5 \
         --target-tool    escalate_to_specialist \
         --overwrite \
         --out            '${REPO_ROOT}/${UNDEFENDED_DIR}'"
-      # NOTE: undefended eval uses stronger attack (100 steps, 5 restarts)
-      # than defended eval (50 steps, 3 restarts) to conservatively widen
-      # the robustness gap — the defence must survive a harder comparison.
+      # NOTE: undefended eval uses stronger attack (100 steps, 5 restarts
+      # configured in configs/attacks.yaml) than defended eval (50 steps,
+      # 3 restarts) to conservatively widen the robustness gap.
       clear_out
     fi
   fi
@@ -666,7 +665,6 @@ run_one_seed() {
         --split          test \
         --max-steps      8 \
         --pgd-steps      50 \
-        --restarts       3 \
         --target-tool    escalate_to_specialist \
         --overwrite \
         --out            '${REPO_ROOT}/${DEFENDED_DIR}'" \
