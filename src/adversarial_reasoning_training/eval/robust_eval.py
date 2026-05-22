@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 # InternVL3 stores tool calls as {"!tool": "name", "args!": {...}}
 # inside final_answer / reasoning_trace text.
 _INTERNVL_TOOL_RE = re.compile(r'"!tool"\s*:\s*"([^"]+)"')
-# Match complete InternVL3 JSON blobs: {"!tool": "...", ...}
-_INTERNVL_BLOB_RE = re.compile(r'\{\s*"[!]tool"\s*:\s*"[^"]+"[^}]*\}')
+# Locate the opening brace of each InternVL3 tool-call JSON blob.
+_INTERNVL_BLOB_START_RE = re.compile(r'\{\s*"[!]tool"\s*:')
 
 T3_METRICS: tuple[str, ...] = (
     "tool_name_acc",
@@ -117,15 +117,35 @@ def _parse_tool_sequence_from_text(text: str) -> list[str]:
 def _parse_tool_calls_from_text(text: str) -> list[dict]:
     """Extract structured ``tool_calls`` from InternVL3-format text.
 
-    Each blob ``{"!tool": "name", "args!": {...}}`` is parsed as JSON.
-    On success, returns ``{"name": ..., "args": {...}}``. On parse failure,
-    falls back to regex-only name extraction with empty args.
+    Each blob ``{"!tool": "name", "args!": {...}}`` is extracted via
+    brace counting (handles nested JSON in args), then parsed as JSON.
+    On success, returns ``{"name": ..., "args": {...}}``. On parse
+    failure, falls back to regex-only name extraction with empty args.
     """
     if not text:
         return []
     tool_calls: list[dict] = []
-    for match in _INTERNVL_BLOB_RE.finditer(text):
-        blob = match.group(0)
+    for m in _INTERNVL_BLOB_START_RE.finditer(text):
+        start = m.start()
+        # Brace-count from the opening '{' to find the matching '}'
+        depth = 0
+        end = start
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if depth != 0:
+            # Unbalanced braces — fall back to regex-only name extraction
+            name_match = _INTERNVL_TOOL_RE.search(text[start:])
+            if name_match:
+                tool_calls.append({"name": name_match.group(1), "args": {}})
+            continue
+        blob = text[start:end]
         try:
             obj = json.loads(blob)
             name = obj.get("!tool", "")
