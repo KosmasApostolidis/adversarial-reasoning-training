@@ -161,7 +161,7 @@ def _build_trainer_config(
         alpha_ratio=pgd_cfg.get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
         pgd_steps=pgd_cfg.get("steps", 7),
         pgd_random_restarts=int(pgd_cfg.get("random_restarts", 1)),
-        loader_seed=int(args.seed),
+        loader_seed=_resolve_seed(args, train_cfg),
         run_dir=args.run_dir,
         final_save_include_optimizer=train_cfg.get(
             "final_save_include_optimizer", True
