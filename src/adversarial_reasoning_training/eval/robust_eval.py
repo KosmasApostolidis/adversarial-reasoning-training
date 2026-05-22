@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 # InternVL3 stores tool calls as {"!tool": "name", "args!": {...}}
 # inside final_answer / reasoning_trace text.
 _INTERNVL_TOOL_RE = re.compile(r'"!tool"\s*:\s*"([^"]+)"')
+# Match complete InternVL3 JSON blobs: {"!tool": "...", ...}
+_INTERNVL_BLOB_RE = re.compile(r'\{\s*"[!]tool"\s*:\s*"[^"]+"[^}]*\}')
 
 T3_METRICS: tuple[str, ...] = (
     "tool_name_acc",
@@ -112,6 +114,30 @@ def _parse_tool_sequence_from_text(text: str) -> list[str]:
     return _INTERNVL_TOOL_RE.findall(text)
 
 
+def _parse_tool_calls_from_text(text: str) -> list[dict]:
+    """Extract structured ``tool_calls`` from InternVL3-format text.
+
+    Each blob ``{"!tool": "name", "args!": {...}}`` is parsed as JSON.
+    On success, returns ``{"name": ..., "args": {...}}``. On parse failure,
+    falls back to regex-only name extraction with empty args.
+    """
+    if not text:
+        return []
+    tool_calls: list[dict] = []
+    for match in _INTERNVL_BLOB_RE.finditer(text):
+        blob = match.group(0)
+        try:
+            obj = json.loads(blob)
+            name = obj.get("!tool", "")
+            args = obj.get("args!", {}) or {}
+            tool_calls.append({"name": name, "args": args})
+        except json.JSONDecodeError:
+            name_match = _INTERNVL_TOOL_RE.search(blob)
+            if name_match:
+                tool_calls.append({"name": name_match.group(1), "args": {}})
+    return tool_calls
+
+
 def _record_metrics(record: dict) -> dict[str, float]:
     benign = record["benign"]
     attacked = record["attacked"]
@@ -121,6 +147,7 @@ def _record_metrics(record: dict) -> dict[str, float]:
 
     # Fallback: InternVL3 stores tools in final_answer / reasoning_trace
     # text. Only trigger when the structured field is genuinely empty.
+    # Also populate ``tool_calls`` from text so args_iou can be computed.
     fallback_triggered = False
     if not benign_seq:
         benign_text = "\n".join(
@@ -130,6 +157,8 @@ def _record_metrics(record: dict) -> dict[str, float]:
             ]
         )
         benign_seq = _parse_tool_sequence_from_text(benign_text)
+        if not benign.get("tool_calls"):
+            benign["tool_calls"] = _parse_tool_calls_from_text(benign_text)
         fallback_triggered = True
     if not attacked_seq:
         attacked_text = "\n".join(
@@ -139,6 +168,8 @@ def _record_metrics(record: dict) -> dict[str, float]:
             ]
         )
         attacked_seq = _parse_tool_sequence_from_text(attacked_text)
+        if not attacked.get("tool_calls"):
+            attacked["tool_calls"] = _parse_tool_calls_from_text(attacked_text)
         fallback_triggered = True
 
     tool_name_acc = 1.0 if benign_seq == attacked_seq else 0.0
