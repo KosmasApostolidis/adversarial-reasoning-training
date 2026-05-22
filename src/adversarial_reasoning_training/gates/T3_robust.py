@@ -253,7 +253,7 @@ def run_t3(
     undefended_per_sample: dict[str, list[float]],
     defended_per_sample: dict[str, list[float]],
     out_path: Path,
-    thresholds: T3Thresholds = T3Thresholds(),
+    thresholds: T3Thresholds | None = None,
     dropped_metrics: list[str] | None = None,
 ) -> T3Result:
     """Compare two per-sample metric dicts under BH-FDR.
@@ -261,6 +261,8 @@ def run_t3(
     Each metric must map to a list of floats of the same length across
     undefended and defended, one entry per eval sample.
     """
+    if thresholds is None:
+        thresholds = T3Thresholds()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     start = time.time()
 

@@ -85,7 +85,7 @@ ablates against:
 - **PGD-AT** (Madry et al., *Towards Deep Learning Models Resistant to
 Adversarial Attacks*, ICLR 2018) — minimise the worst-case loss
 inside an ε-ball using projected gradient descent inner loop. The
-baseline against which everything else is measured.
+undefended against which everything else is measured.
 - **TRADES** (Zhang et al., *Theoretically Principled Trade-off between
 Robustness and Accuracy*, ICML 2019) — decompose the loss into a
 natural cross-entropy term and a robustness term that is the KL
@@ -96,7 +96,7 @@ robustness/accuracy frontier explicitly.
 follow-up work on outer-adversarial training) — convex combination
 of clean and adversarial cross-entropy:
 `L = α · CE(clean) + (1 − α) · CE(adv)`. Simpler than TRADES,
-often a strong baseline.
+often a strong undefended.
 - **MART** (Wang et al., *Improving Adversarial Robustness Requires
 Revisiting Misclassified Examples*, ICLR 2020) — re-weights the
 adversarial term by misclassification.
@@ -364,17 +364,17 @@ python -m adversarial_reasoning_training.gates.T2_no_collapse \
   --tolerance-pp  3.0 \
   --out           runs/qwen_full_seed0/gates/T2.json
 
-# 0e. Generate baseline (undefended) and defended records via attacks-repo runner.
+# 0e. Generate undefended and defended records via attacks-repo runner.
 cd ../adversarial-reasoning-attacks
 python -m adversarial_reasoning.runner \
-  --config         configs/experiments/baseline_qwen.yaml \
+  --config         configs/experiments/undefended_qwen.yaml \
   --attacks-config configs/attacks.yaml \
   --split          dev \
   --max-steps      8 \
   --pgd-steps      20 \
   --target-tool    escalate_to_specialist \
   --target-step-k  0 \
-  --out            ../adversarial-reasoning-training/runs/baseline_qwen/records.jsonl
+  --out            ../adversarial-reasoning-training/runs/undefended_qwen/records.jsonl
 
 python -m adversarial_reasoning.runner \
   --config         configs/experiments/defended_qwen.yaml \
@@ -389,7 +389,7 @@ cd -
 
 # 0f. T3 robust-eval gate (Wilcoxon + BH-FDR).
 art-eval-robust \
-  --baseline-records         runs/baseline_qwen/records.jsonl \
+  --undefended-records         runs/undefended_qwen/records.jsonl \
   --defended-records         runs/qwen_full_seed0/records.jsonl \
   --out-dir                  runs/qwen_full_seed0/gates/ \
   --alpha                    0.05 \
@@ -398,7 +398,7 @@ art-eval-robust \
 ```
 
 > ⚠️ Phase 0e expects
-> `../adversarial-reasoning-attacks/configs/experiments/{baseline_qwen,defended_qwen}.yaml`
+> `../adversarial-reasoning-attacks/configs/experiments/{undefended_qwen,defended_qwen}.yaml`
 > to exist. `defended_qwen.yaml` should point its checkpoint at
 > `runs/qwen_full_seed0/ckpt/best.pt`.
 
@@ -433,7 +433,7 @@ for SEED in 0 1 2 3 4; do
   cd -
 
   art-eval-robust \
-    --baseline-records         runs/baseline_qwen/records.jsonl \
+    --undefended-records         runs/undefended_qwen/records.jsonl \
     --defended-records         runs/qwen_main_seed${SEED}/records.jsonl \
     --out-dir                  runs/qwen_main_seed${SEED}/gates/ \
     --alpha                    0.05 \
@@ -578,8 +578,8 @@ for LOSS in trades pgd_at oaat; do
   done
 done
 
-# Plus baseline_llava records + per-seed defended records (same shape as
-# Phase 0e and Phase 1 runner block; swap --config configs/experiments/{baseline,defended}_llava.yaml).
+# Plus undefended_llava records + per-seed defended records (same shape as
+# Phase 0e and Phase 1 runner block; swap --config configs/experiments/{undefended,defended}_llava.yaml).
 ```
 
 ### 5.6 Phase 4 — InternVL2-8B replication
@@ -642,7 +642,7 @@ runs/<id>/
 └── logs/             # train log + memory probe
 ```
 
-`runs/baseline_<model>/records.jsonl` (the undefended reference) is
+`runs/undefended_<model>/records.jsonl` (the undefended reference) is
 generated **once per model** then reused by every defended seed and
 ablation cell — do not regenerate per seed.
 

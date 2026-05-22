@@ -175,7 +175,15 @@ def main(argv: list[str] | None = None) -> int:
     # Seed only AFTER validation so YAML's ``training.seed`` is reachable;
     # pre-fix this ran ``setup_seed(args.seed)`` before validation, which
     # silently used the CLI default of 0 whenever the operator omitted --seed.
-    setup_seed(_resolve_seed(args, train_cfg))
+    # InternVL3's vision tower invokes ``upsample_bicubic2d`` for position
+    # embedding interpolation; its CUDA backward has no deterministic kernel,
+    # so strict ``use_deterministic_algorithms(True)`` raises on first .backward.
+    # warn_only=True keeps determinism for every other op and lets that one op
+    # fall back to its non-deterministic kernel.
+    setup_seed(
+        _resolve_seed(args, train_cfg),
+        warn_only=args.model.lower().startswith("internvl"),
+    )
 
     vlm = _build_vlm(args.model, args.models_yaml)
     model = vlm.model

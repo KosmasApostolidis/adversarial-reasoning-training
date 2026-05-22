@@ -20,9 +20,9 @@ State on this branch (`fix/audit-trainer-pipeline-t3-losses`) before launching a
 
 | Asset                                            | State                                          |
 |--------------------------------------------------|------------------------------------------------|
-| `runs/baseline_qwen/records.jsonl`               | 3.8 MB — intact                                |
-| `runs/baseline_llava/records.jsonl`              | 8.4 MB — intact                                |
-| `runs/baseline_internvl2/records.jsonl`          | **0 bytes** — poisoned stub (R1 below)         |
+| `runs/undefended_qwen/records.jsonl`               | 3.8 MB — intact                                |
+| `runs/undefended_llava/records.jsonl`              | 8.4 MB — intact                                |
+| `runs/undefended_internvl2/records.jsonl`          | **0 bytes** — poisoned stub (R1 below)         |
 | `runs/{qwen,llava,internvl2}_main_seed{0..4}/`   | dirs exist, **0 files** each                   |
 | `runs/adv1_{qwen,llava,internvl2}/ckpt/hf_dir/`  | **all missing** (Phase 3 of the standard sheet)|
 | `results/qwen_main/aggregate.json`               | 1.9 KB — stale, regenerate after Phase 4       |
@@ -43,7 +43,7 @@ Required restoration steps, in order:
 
 | Step | What                                                | Section                          | Wall-time est. |
 |------|-----------------------------------------------------|----------------------------------|----------------|
-| R1   | Re-baseline `internvl2` (regenerate 0-byte records) | "Phase 1 — Baseline records"     | ~2 h H200      |
+| R1   | Re-undefended `internvl2` (regenerate 0-byte records) | "Phase 1 — Undefended records"     | ~2 h H200      |
 | R2   | T0 + T1 gates per model (skip already-green ones)   | CLI Reference / Phase 1          | ~2 h × 3       |
 | R3   | Adv-FT × 3 models × 5 seeds                         | Phase 2 / Phase 3                | ~6–8 h × 15    |
 | R4   | HF export of seed-0 ckpts (one per model)           | Defended-model hf_dir conversion | ~5 min × 3     |
@@ -65,7 +65,7 @@ Two open issues to surface before the publication cut:
    before treating the 5-seed defended variance as real.
 2. **0-byte records on model-load failure.** `runner.py:378` opens `records.jsonl`
    *before* `load_hf_vlm`, leaving a 0-byte stub on any load failure. Cause of the
-   `baseline_internvl2/records.jsonl` corruption above. Cross-repo fix; tracked in
+   `undefended_internvl2/records.jsonl` corruption above. Cross-repo fix; tracked in
    `.claude/plans/idempotent-snuggling-quokka.md` Fix 1.
 
 ---
@@ -175,7 +175,7 @@ Models: Hugging Face cache populated for `qwen2_5_vl_7b`,
 `../adversarial-reasoning-attacks/configs/models.yaml`.
 
 **Llama gated-access prerequisite.** `meta-llama/Llama-3.2-11B-Vision-Instruct`
-is a gated repo; **any** Phase 4 invocation (T0/T1/baseline/adv-FT/T3) fails
+is a gated repo; **any** Phase 4 invocation (T0/T1/undefended/adv-FT/T3) fails
 with `Cannot access gated repo for url …` until the running HF account has
 the Meta license grant *and* a token with that grant in cache:
 
@@ -261,7 +261,7 @@ runs/<id>/
 └── logs/             # train log + memory probe
 ```
 
-`runs/baseline_<model>/records.jsonl` (undefended reference) is generated
+`runs/undefended_<model>/records.jsonl` (undefended reference) is generated
 **once per model** then reused by every defended seed/ablation cell —
 do not regenerate per seed.
 
@@ -293,7 +293,7 @@ art-train \
 
 ```
 art-eval-robust \
-  --baseline-records       <records.jsonl> \
+  --undefended-records       <records.jsonl> \
   --defended-records       <records.jsonl> \
   --out-dir                <dir> \
   --alpha                  0.05 \
@@ -433,20 +433,20 @@ python -m adversarial_reasoning_training.gates.T2_no_collapse \
   --tolerance-pp  3.0 \
   --out           runs/qwen_full_seed0/gates/T2.json
 
-# 0e. Generate baseline (undefended) and defended records via attacks-repo runner.
-# > ⚠️ Not yet in repo: `../adversarial-reasoning-attacks/configs/experiments/{baseline_qwen,defended_qwen}.yaml`.
+# 0e. Generate undefended and defended records via attacks-repo runner.
+# > ⚠️ Not yet in repo: `../adversarial-reasoning-attacks/configs/experiments/{undefended_qwen,defended_qwen}.yaml`.
 # > Author both before this step. `defended_qwen.yaml` should point its
 # > checkpoint at `runs/qwen_full_seed0/ckpt/best.pt`.
 cd ../adversarial-reasoning-attacks
 python -m adversarial_reasoning.runner \
-  --config         configs/experiments/baseline_qwen.yaml \
+  --config         configs/experiments/undefended_qwen.yaml \
   --attacks-config configs/attacks.yaml \
   --split          dev \
   --max-steps      8 \
   --pgd-steps      20 \
   --target-tool    escalate_to_specialist \
   --target-step-k  0 \
-  --out            ../adversarial-reasoning-training/runs/baseline_qwen/records.jsonl
+  --out            ../adversarial-reasoning-training/runs/undefended_qwen/records.jsonl
 
 python -m adversarial_reasoning.runner \
   --config         configs/experiments/defended_qwen.yaml \
@@ -461,7 +461,7 @@ cd -
 
 # 0f. T3 robust-eval gate (Wilcoxon paired + BH-FDR).
 art-eval-robust \
-  --baseline-records         runs/baseline_qwen/records.jsonl \
+  --undefended-records         runs/undefended_qwen/records.jsonl \
   --defended-records         runs/qwen_full_seed0/records.jsonl \
   --out-dir                  runs/qwen_full_seed0/gates/ \
   --alpha                    0.05 \
@@ -505,7 +505,7 @@ for SEED in 0 1 2 3 4; do
   cd -
 
   art-eval-robust \
-    --baseline-records         runs/baseline_qwen/records.jsonl \
+    --undefended-records         runs/undefended_qwen/records.jsonl \
     --defended-records         runs/qwen_main_seed${SEED}/records.jsonl \
     --out-dir                  runs/qwen_main_seed${SEED}/gates/ \
     --alpha                    0.05 \
@@ -670,8 +670,8 @@ for LOSS in trades pgd_at oaat; do
   done
 done
 
-# Plus baseline_llava records + per-seed defended records (same shape as Phase 0e
-# and Phase 1 runner block; swap --config configs/experiments/{baseline,defended}_llava.yaml).
+# Plus undefended_llava records + per-seed defended records (same shape as Phase 0e
+# and Phase 1 runner block; swap --config configs/experiments/{undefended,defended}_llava.yaml).
 ```
 
 ---
@@ -722,8 +722,8 @@ for SEED in 0 1 2 3 4; do
 done
 # Loss-family ablation block identical to Phase 3, --model swapped to internvl2_8b.
 
-# Baseline + defended records (same shape as Phase 0e / Phase 3):
-#   --config configs/experiments/{baseline,defended}_internvl2.yaml
+# Undefended + defended records (same shape as Phase 0e / Phase 3):
+#   --config configs/experiments/{undefended,defended}_internvl2.yaml
 ```
 
 ---
@@ -1001,7 +1001,7 @@ for ALIAS in qwen llava internvl2; do
     cd -
 
     art-eval-robust \
-      --baseline-records         runs/baseline_${ALIAS}/records.jsonl \
+      --undefended-records         runs/undefended_${ALIAS}/records.jsonl \
       --defended-records         runs/${ALIAS}_main_seed${SEED}/records_adaptive.jsonl \
       --out-dir                  runs/${ALIAS}_main_seed${SEED}/gates_adaptive/ \
       --alpha                    0.05 \
@@ -1011,10 +1011,10 @@ for ALIAS in qwen llava internvl2; do
 done
 ```
 
-**Exit criterion.** A second T3-style table per model: defended-vs-baseline
+**Exit criterion.** A second T3-style table per model: defended-vs-undefended
 under the adaptive attacker. The acceptable outcome is *some* drop in
 `traj_edit_delta` (otherwise the adaptive term is doing nothing); the
-unacceptable outcome is the defense collapsing to baseline performance,
+unacceptable outcome is the defense collapsing to undefended performance,
 which would indicate gradient masking. Report both numbers in the
 paper's "adaptive attack" appendix.
 
@@ -1053,7 +1053,7 @@ for ATTACK in autoattack bpda; do
 done
 ```
 
-**Exit criterion.** Per-attack defended-vs-baseline `traj_edit_delta`
+**Exit criterion.** Per-attack defended-vs-undefended `traj_edit_delta`
 in a paper appendix table. No significance test (N=50 is too small);
 report raw deltas only.
 
@@ -1078,7 +1078,7 @@ for K in 0 2 4; do
     cd -
 
     art-eval-robust \
-      --baseline-records         runs/baseline_${ALIAS}/records.jsonl \
+      --undefended-records         runs/undefended_${ALIAS}/records.jsonl \
       --defended-records         runs/${ALIAS}_main_seed0/records_step${K}.jsonl \
       --out-dir                  runs/${ALIAS}_main_seed0/gates_step${K}/ \
       --alpha                    0.05 \
@@ -1191,7 +1191,7 @@ done
 ### 6C.3 TeCoA / FARE encoder-only adversarial fine-tuning
 
 **Goal.** Head-to-head against the canonical "harden the vision encoder
-in isolation" baseline (`docs/PROJECT_OVERVIEW.md` §2.2). Tests the
+in isolation" undefended (`docs/PROJECT_OVERVIEW.md` §2.2). Tests the
 trajectory-aware-AT-beats-encoder-only-AT claim explicitly.
 
 > ⚠️ Not yet in repo: a new training mode `--full-ft configs/ablations/full_ft_vit_only.yaml`
@@ -1233,7 +1233,7 @@ defended ckpt, sweep eval-time PGD steps ∈ {1, 5, 10, 20, 40}; plot
 attack budget.
 
 > ⚠️ Not yet in repo: `scripts/figures/make_budget_curve.py`. Expected
-> interface: `--inputs <records_pgd${S}.jsonl>... --baseline <jsonl> --out <png>`.
+> interface: `--inputs <records_pgd${S}.jsonl>... --undefended <jsonl> --out <png>`.
 
 ```bash
 for S in 1 5 10 20 40; do
@@ -1252,26 +1252,26 @@ done
 
 python scripts/figures/make_budget_curve.py \
   --inputs   runs/qwen_main_seed0/records_pgd{1,5,10,20,40}.jsonl \
-  --baseline runs/baseline_qwen/records.jsonl \
+  --undefended runs/undefended_qwen/records.jsonl \
   --out      figures/fig_budget_curve_qwen.png
 ```
 
 **Exit criterion.** Single PNG per model showing the four T3 metrics
 on the y-axis and PGD-steps on the x-axis. Defended curves should
-plateau; baseline curves should drop monotonically.
+plateau; undefended curves should drop monotonically.
 
 ### 6D.2 Per-tool flip confusion matrix
 
 **Goal.** Diagnostic figure showing *where* tool flips go. From the
 existing per-sample `records.jsonl` (no extra runs), aggregate
-`tool_called_baseline → tool_called_defended` into a confusion matrix.
+`tool_called_undefended → tool_called_defended` into a confusion matrix.
 
 > ⚠️ Not yet in repo: `scripts/figures/make_tool_confusion.py`. Expected
-> interface: `--baseline <jsonl> --defended <jsonl> --out <png>`.
+> interface: `--undefended <jsonl> --defended <jsonl> --out <png>`.
 
 ```bash
 python scripts/figures/make_tool_confusion.py \
-  --baseline runs/baseline_qwen/records.jsonl \
+  --undefended runs/undefended_qwen/records.jsonl \
   --defended runs/qwen_main_seed0/records.jsonl \
   --out      figures/fig_tool_confusion_qwen.png
 ```

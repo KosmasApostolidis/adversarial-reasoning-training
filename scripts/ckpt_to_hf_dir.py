@@ -42,7 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config-path",
         type=Path,
-        default=Path("/home/medadmin/kosmasapostolidis/adversarial-reasoning-attacks/configs/models.yaml"),
+        default=Path(__file__).resolve().parent.parent.parent
+        / "adversarial-reasoning-attacks" / "configs" / "models.yaml",
     )
     args = parser.parse_args(argv)
 
@@ -67,8 +68,16 @@ def main(argv: list[str] | None = None) -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     print(f"saving model to {args.out_dir}")
     vlm.model.save_pretrained(args.out_dir, safe_serialization=True)
-    print(f"saving processor to {args.out_dir}")
-    vlm.processor.save_pretrained(args.out_dir)
+    processor = getattr(vlm, "processor", None)
+    tokenizer = getattr(vlm, "tokenizer", None)
+    tok_like = processor if processor is not None else tokenizer
+    if tok_like is None:
+        raise RuntimeError(
+            f"VLM wrapper {type(vlm).__name__} exposes neither `processor` nor `tokenizer`"
+        )
+    kind = "processor" if processor is not None else "tokenizer"
+    print(f"saving {kind} to {args.out_dir}")
+    tok_like.save_pretrained(args.out_dir)
 
     print(f"done — listing {args.out_dir}:")
     for p in sorted(args.out_dir.iterdir()):

@@ -27,8 +27,16 @@ Four T3 metrics are computed here:
 from __future__ import annotations
 
 import json
+import logging
 import math
+import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# InternVL3 stores tool calls as {"!tool": "name", "args!": {...}}
+# inside final_answer / reasoning_trace text.
+_INTERNVL_TOOL_RE = re.compile(r'"!tool"\s*:\s*"([^"]+)"')
 
 T3_METRICS: tuple[str, ...] = (
     "tool_name_acc",
@@ -76,23 +84,93 @@ def _args_iou_record(record: dict) -> float:
     return total / n_paired
 
 
+def _levenshtein_norm(a: list[str], b: list[str]) -> float:
+    """Normalised Levenshtein distance in [0, 1]. 0.0 = identical."""
+    if not a and not b:
+        return 0.0
+    m, n = len(a), len(b)
+    prev = list(range(n + 1))
+    curr = [0] * (n + 1)
+    for i in range(1, m + 1):
+        curr[0] = i
+        for j in range(1, n + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            curr[j] = min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+        prev, curr = curr, prev
+    return prev[n] / max(m, n)
+
+
+def _parse_tool_sequence_from_text(text: str) -> list[str]:
+    """Extract ordered tool names from InternVL3-format text.
+
+    InternVL3 embeds tool calls as ``{"!tool": "name", ...}`` JSON
+    blobs inside ``final_answer`` and ``reasoning_trace``. Returns
+    tool names in document order or an empty list when none found.
+    """
+    if not text:
+        return []
+    return _INTERNVL_TOOL_RE.findall(text)
+
+
 def _record_metrics(record: dict) -> dict[str, float]:
     benign = record["benign"]
     attacked = record["attacked"]
 
     benign_seq = list(benign.get("tool_sequence", []))
     attacked_seq = list(attacked.get("tool_sequence", []))
+
+    # Fallback: InternVL3 stores tools in final_answer / reasoning_trace
+    # text. Only trigger when the structured field is genuinely empty.
+    fallback_triggered = False
+    if not benign_seq:
+        benign_text = "\n".join(
+            [
+                benign.get("reasoning_trace") or "",
+                benign.get("final_answer") or "",
+            ]
+        )
+        benign_seq = _parse_tool_sequence_from_text(benign_text)
+        fallback_triggered = True
+    if not attacked_seq:
+        attacked_text = "\n".join(
+            [
+                attacked.get("reasoning_trace") or "",
+                attacked.get("final_answer") or "",
+            ]
+        )
+        attacked_seq = _parse_tool_sequence_from_text(attacked_text)
+        fallback_triggered = True
+
     tool_name_acc = 1.0 if benign_seq == attacked_seq else 0.0
 
     benign_ans = (benign.get("final_answer") or "").strip()
     attacked_ans = (attacked.get("final_answer") or "").strip()
     answer_em = 1.0 if benign_ans == attacked_ans else 0.0
 
-    edit_distance_norm = float(record.get("edit_distance_norm", 1.0))
-    edit_distance_norm = max(0.0, min(1.0, edit_distance_norm))
-    traj_edit_distance = 1.0 - edit_distance_norm
+    # When the text fallback was used the record-level edit_distance_norm
+    # was computed from empty tool_sequences (0.0 → fake 1.0 similarity).
+    # Compute from the parsed sequences instead so traj_edit_distance and
+    # tool_name_acc agree on what the tool sequences actually were.
+    if fallback_triggered:
+        traj_edit_distance = 1.0 - _levenshtein_norm(benign_seq, attacked_seq)
+    else:
+        edit_distance_norm = float(record.get("edit_distance_norm", 1.0))
+        edit_distance_norm = max(0.0, min(1.0, edit_distance_norm))
+        traj_edit_distance = 1.0 - edit_distance_norm
 
     args_iou = _args_iou_record(record)
+    # Detect fake-perfection: both tool_calls empty (old-format records)
+    # but tool sequences exist in text → args are unknowable → NaN.
+    if args_iou == 1.0 and (benign_seq or attacked_seq):
+        b_calls = record.get("benign", {}).get("tool_calls")
+        a_calls = record.get("attacked", {}).get("tool_calls")
+        if (
+            b_calls is not None
+            and a_calls is not None
+            and not b_calls
+            and not a_calls
+        ):
+            args_iou = float("nan")
 
     return {
         "tool_name_acc": tool_name_acc,
@@ -114,11 +192,17 @@ def _pair_key(record: dict) -> tuple[str, float, str, int]:
 def load_records(path: Path) -> list[dict]:
     records: list[dict] = []
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for lineno, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
                 continue
-            records.append(json.loads(line))
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                logger.warning(
+                    "skipping malformed JSON at %s:%d — %s",
+                    path, lineno, line[:80],
+                )
     return records
 
 
@@ -150,7 +234,7 @@ def _drop_nan_metrics_paired(
 ) -> tuple[tuple[dict[str, list[float]], ...], list[str]]:
     """Apply :func:`_drop_nan_metrics` symmetrically across N dicts:
     a metric is dropped from EVERY dict if ANY dict has a NaN for it.
-    Required for paired comparisons (e.g. baseline vs defended) — the
+    Required for paired comparisons (e.g. undefended vs defended) — the
     naive per-dict drop produces length-mismatched paired arrays
     (H1: empty list paired with populated list).
     """
@@ -173,7 +257,7 @@ def records_to_per_sample(path: Path) -> dict[str, list[float]]:
     Records are sorted by (sample_id, epsilon, attack_mode, seed) so
     that two independent models' per-sample arrays line up index-for-
     index when both runs cover the same eval matrix. For paired
-    baseline/defended evaluation, prefer :func:`align_per_sample`,
+    undefended/defended evaluation, prefer :func:`align_per_sample`,
     which intersects on the pair-key and is robust to missing rows.
     """
     records = load_records(path)
@@ -188,39 +272,18 @@ def records_to_per_sample(path: Path) -> dict[str, list[float]]:
 
 
 def align_per_sample(
-    baseline_records: Path,
+    undefended_records: Path,
     defended_records: Path,
 ) -> tuple[dict[str, list[float]], dict[str, list[float]], list[tuple[str, float, str, int]]]:
-    """Load both records files and emit per-sample dicts on the
-    intersection of their (sample_id, epsilon, attack_mode, seed)
-    keys, sorted identically.
-
-    Returns ``(baseline_per_sample, defended_per_sample, shared_keys)``.
-    Records present on only one side are dropped silently; callers
-    can compare ``len(shared_keys)`` against the input record counts
-    to detect coverage holes.
-    """
-    base_recs = {_pair_key(r): r for r in load_records(baseline_records)}
-    def_recs = {_pair_key(r): r for r in load_records(defended_records)}
-    shared_keys = sorted(set(base_recs) & set(def_recs))
-
-    baseline: dict[str, list[float]] = {key: [] for key in T3_METRICS}
-    defended: dict[str, list[float]] = {key: [] for key in T3_METRICS}
-    for key in shared_keys:
-        b_metrics = _record_metrics(base_recs[key])
-        d_metrics = _record_metrics(def_recs[key])
-        for metric in T3_METRICS:
-            baseline[metric].append(b_metrics[metric])
-            defended[metric].append(d_metrics[metric])
-    # Paired drop: a NaN on either side empties the metric on BOTH so
-    # downstream consumers never see a populated list paired with []
-    # (H1: independent drops produce length-mismatched paired arrays).
-    (baseline, defended), _ = _drop_nan_metrics_paired(baseline, defended)
-    return baseline, defended, shared_keys
+    """Like :func:`align_per_sample_with_drops` without dropped-metric tracking."""
+    undefended, defended, shared_keys, _ = align_per_sample_with_drops(
+        undefended_records, defended_records,
+    )
+    return undefended, defended, shared_keys
 
 
 def align_per_sample_with_drops(
-    baseline_records: Path,
+    undefended_records: Path,
     defended_records: Path,
 ) -> tuple[
     dict[str, list[float]],
@@ -233,20 +296,20 @@ def align_per_sample_with_drops(
     T3 layer (or its caller) can surface them to the operator and
     refuse to silently pass with reduced evidence (C5).
     """
-    base_recs = {_pair_key(r): r for r in load_records(baseline_records)}
+    base_recs = {_pair_key(r): r for r in load_records(undefended_records)}
     def_recs = {_pair_key(r): r for r in load_records(defended_records)}
     shared_keys = sorted(set(base_recs) & set(def_recs))
 
-    baseline: dict[str, list[float]] = {key: [] for key in T3_METRICS}
+    undefended: dict[str, list[float]] = {key: [] for key in T3_METRICS}
     defended: dict[str, list[float]] = {key: [] for key in T3_METRICS}
     for key in shared_keys:
         b_metrics = _record_metrics(base_recs[key])
         d_metrics = _record_metrics(def_recs[key])
         for metric in T3_METRICS:
-            baseline[metric].append(b_metrics[metric])
+            undefended[metric].append(b_metrics[metric])
             defended[metric].append(d_metrics[metric])
-    (baseline, defended), dropped = _drop_nan_metrics_paired(baseline, defended)
-    return baseline, defended, shared_keys, dropped
+    (undefended, defended), dropped = _drop_nan_metrics_paired(undefended, defended)
+    return undefended, defended, shared_keys, dropped
 
 
 def save_per_sample(path: Path, per_sample: dict[str, list[float]]) -> None:

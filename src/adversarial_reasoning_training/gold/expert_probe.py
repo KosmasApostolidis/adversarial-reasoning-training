@@ -8,9 +8,12 @@ gate T1 evaluation.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 from adversarial_reasoning.agents.base import ToolCall, Trajectory
+
+logger = logging.getLogger(__name__)
 
 
 def _trajectory_from_dict(d: dict) -> Trajectory:
@@ -34,6 +37,7 @@ def load_expert_probe(path: str | Path) -> list[tuple[str, Trajectory]]:
     """
     p = Path(path)
     if not p.exists():
+        logger.warning("expert probe file not found at %s — returning empty list", p)
         return []
     out: list[tuple[str, Trajectory]] = []
     with p.open("r", encoding="utf-8") as f:

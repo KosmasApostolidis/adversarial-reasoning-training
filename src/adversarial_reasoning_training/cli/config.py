@@ -21,7 +21,7 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
     keys win on scalar conflicts; nested dicts merge recursively; lists
     are replaced (not concatenated) since list-merge semantics are
     rarely the intent. This lets ablation configs share the production
-    baseline (e.g. ``configs/defenses.yaml``) without duplicating its
+    undefended (e.g. ``configs/defenses.yaml``) without duplicating its
     pgd/trades subtrees in each ablation cell. PyYAML's ``safe_load``
     only resolves anchors intra-file, so cross-file composition has to
     happen at the loader layer.

@@ -6,8 +6,11 @@
 oracle_version: v1
 cache_dir: data/gold
 
+# NOTE: expert_probe paths and thresholds are configured at the gate level
+# (T1 CLI flags), not read from this file. The template list below is also
+# advisory — all five templates are always enabled in code.
 expert_probe: data/gold/expert_probe.jsonl
-expert_probe_min_acc: 0.85   # T1 must clear this on the held-out probe set
+expert_probe_min_acc: 0.85
 
 templates:
   enabled:

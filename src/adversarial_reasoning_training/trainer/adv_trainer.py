@@ -430,6 +430,8 @@ class AdvTrainer:
         self.optimizer.zero_grad(set_to_none=True)
         self._accum_loss_acc = 0.0
         self._accum_count = 0
+        if getattr(self, "use_amp", False) and getattr(self, "amp_dtype", "") == "fp16":
+            self.scaler.update()
 
     def _drain_partial_window(
         self,
@@ -505,7 +507,14 @@ class AdvTrainer:
         the same reader works across T0/T1/T2/T3 + trainer outputs.
         """
         global_step = self._global_step
-        metrics = self.evaluator(global_step, self.config.epochs) if self.evaluator else {}
+        try:
+            metrics = self.evaluator(global_step, self.config.epochs) if self.evaluator else {}
+        except Exception:
+            logger.exception(
+                "evaluator crashed at step=%d — proceeding with empty metrics "
+                "to save final checkpoint", global_step,
+            )
+            metrics = {}
         metric_value = metrics.get(self.metric_for_best) if metrics else None
         if self.config.final_save_include_optimizer:
             self.ckpt.save(

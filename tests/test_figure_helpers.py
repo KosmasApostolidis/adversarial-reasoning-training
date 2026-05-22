@@ -80,13 +80,13 @@ def _write_t3(path: Path, *, delta: float = 0.30, passed: bool = True) -> None:
     path.write_text(json.dumps({
         "passed": passed,
         "per_metric": {
-            "tool_name_acc":      {"baseline_mean": 0.40, "defended_mean": 0.40 + delta,
+            "tool_name_acc":      {"undefended_mean": 0.40, "defended_mean": 0.40 + delta,
                                    "delta": delta, "p_value": 0.001, "p_adj": 0.001},
-            "args_iou":           {"baseline_mean": 0.50, "defended_mean": 0.50 + delta,
+            "args_iou":           {"undefended_mean": 0.50, "defended_mean": 0.50 + delta,
                                    "delta": delta, "p_value": 0.01,  "p_adj": 0.02},
-            "answer_em":          {"baseline_mean": 0.30, "defended_mean": 0.30 + delta,
+            "answer_em":          {"undefended_mean": 0.30, "defended_mean": 0.30 + delta,
                                    "delta": delta, "p_value": 0.001, "p_adj": 0.002},
-            "traj_edit_distance": {"baseline_mean": 0.20, "defended_mean": 0.20 + delta,
+            "traj_edit_distance": {"undefended_mean": 0.20, "defended_mean": 0.20 + delta,
                                    "delta": delta, "p_value": 0.005, "p_adj": 0.01},
         },
     }))

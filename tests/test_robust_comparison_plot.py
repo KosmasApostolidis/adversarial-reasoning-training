@@ -27,7 +27,7 @@ def make_figures():
 
 
 def test_render_robust_comparison_writes_non_empty_png(tmp_path: Path, make_figures) -> None:
-    baseline = {
+    undefended = {
         "tool_name_acc": [0.0, 0.0, 1.0, 0.0, 0.0],
         "answer_em": [0.0, 0.0, 0.0, 1.0, 0.0],
         "traj_edit_distance": [0.10, 0.20, 0.05, 0.15, 0.25],
@@ -42,7 +42,7 @@ def test_render_robust_comparison_writes_non_empty_png(tmp_path: Path, make_figu
         "significant_metrics": ["tool_name_acc", "traj_edit_distance"],
     }
     out = tmp_path / "robust.png"
-    make_figures.render_robust_comparison(baseline, defended, t3_payload, out)
+    make_figures.render_robust_comparison(undefended, defended, t3_payload, out)
 
     assert out.exists()
     assert out.stat().st_size > 4096
@@ -69,7 +69,7 @@ def test_bootstrap_ci_handles_empty(make_figures) -> None:
 
 
 def test_render_skips_metrics_missing_from_either_side(tmp_path: Path, make_figures) -> None:
-    baseline = {
+    undefended = {
         "tool_name_acc": [0.0, 0.0, 0.0],
         "traj_edit_distance": [0.1, 0.2, 0.3],
     }
@@ -79,7 +79,7 @@ def test_render_skips_metrics_missing_from_either_side(tmp_path: Path, make_figu
     }
     t3_payload = {"passed": True, "significant_metrics": ["tool_name_acc"]}
     out = tmp_path / "robust.png"
-    make_figures.render_robust_comparison(baseline, defended, t3_payload, out)
+    make_figures.render_robust_comparison(undefended, defended, t3_payload, out)
 
     assert out.exists()
     assert out.stat().st_size > 4096

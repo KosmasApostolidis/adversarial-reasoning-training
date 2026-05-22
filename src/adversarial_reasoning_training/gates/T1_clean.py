@@ -14,7 +14,9 @@ Writes ``runs/<id>/gates/T1.json``.
 
 from __future__ import annotations
 
+import argparse
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -34,6 +36,8 @@ from ._common import (
     load_gate_yaml,
     write_gate_result,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,11 +108,15 @@ def _compute_t1_verdict(
     """Read metrics, apply thresholds, return (passed, tool_acc, answer_em, notes)."""
     tool_acc = float(metrics.get(tool_name_metric, 0.0))
     answer_em = float(metrics.get(answer_em_metric, 0.0))
+    notes: list[str] = []
+    if tool_name_metric not in metrics:
+        notes.append(f"{tool_name_metric} missing from evaluator output — using 0.0")
+    if answer_em_metric not in metrics:
+        notes.append(f"{answer_em_metric} missing from evaluator output — using 0.0")
     passed = (
         tool_acc >= thresholds.tool_name_acc_min
         and answer_em >= thresholds.answer_em_min
     )
-    notes: list[str] = []
     if tool_acc < thresholds.tool_name_acc_min:
         notes.append(f"tool_name_acc {tool_acc:.3f} < {thresholds.tool_name_acc_min}")
     if answer_em < thresholds.answer_em_min:
@@ -233,6 +241,11 @@ def make_teacher_forced_evaluator(
         )
         if was_training:
             model.train(True)
+        if tool_total == 0 and ans_total == 0:
+            logger.warning(
+                "T1 evaluator: dev set returned 0 tool tokens and 0 answer tokens — "
+                "empty dataset or all samples missing tool/answer segments?"
+            )
         return {
             "tool_name_acc": tool_correct / max(1, tool_total),
             "answer_em": ans_correct / max(1, ans_total),
@@ -275,8 +288,6 @@ def _accumulate_proxy_accuracies(
 
 def _build_t1_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for the T1 gate."""
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--data", type=Path, default=Path("configs/data.yaml"))

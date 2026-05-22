@@ -8,7 +8,7 @@
 defense: oaat               # trades | pgd_at | oaat
 seed: 0
 
-epochs: 8                   # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..8)
+epochs: 64                  # anchored to defenses.yaml::pgd.eps_schedule (epochs 1..64)
 micro_batch: 1
 grad_accum: 8               # effective batch size = 8
 

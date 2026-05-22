@@ -42,7 +42,7 @@ jobs:
         run: pytest -m 'not slow' --maxfail=1 --tb=short
 
       # --- advisory gates: report failures, do not fail CI ---
-      # mypy has a non-zero baseline (15 errors) that should be cleared in a
+      # mypy has a non-zero undefended (15 errors) that should be cleared in a
       # follow-up PR before this gate is promoted to required.
 
       - name: mypy (advisory)

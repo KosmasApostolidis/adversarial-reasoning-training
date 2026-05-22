@@ -48,48 +48,48 @@ def test_production_full_ft_yaml_passes() -> None:
     validate_full_ft(load_yaml(CONFIGS / "full_ft.yaml"))
 
 
-def _baseline_training() -> dict:
+def _undefended_training() -> dict:
     return load_yaml(CONFIGS / "training.yaml")
 
 
-def _baseline_defenses() -> dict:
+def _undefended_defenses() -> dict:
     return load_yaml(CONFIGS / "defenses.yaml")
 
 
-def _baseline_full_ft() -> dict:
+def _undefended_full_ft() -> dict:
     return load_yaml(CONFIGS / "full_ft.yaml")
 
 
 def test_training_rejects_unknown_defense() -> None:
-    cfg = _baseline_training()
+    cfg = _undefended_training()
     cfg["defense"] = "tradse"  # typo
     with pytest.raises(ValueError, match="defense"):
         validate_training(cfg)
 
 
 def test_training_rejects_unknown_optim() -> None:
-    cfg = _baseline_training()
+    cfg = _undefended_training()
     cfg["optim"] = "adamw_8bit"  # underscore typo
     with pytest.raises(ValueError, match="optim"):
         validate_training(cfg)
 
 
 def test_training_rejects_unknown_schedule() -> None:
-    cfg = _baseline_training()
+    cfg = _undefended_training()
     cfg["schedule"] = "cosin"
     with pytest.raises(ValueError, match="schedule"):
         validate_training(cfg)
 
 
 def test_training_rejects_missing_lr_role() -> None:
-    cfg = _baseline_training()
+    cfg = _undefended_training()
     del cfg["lr"]["projector"]
     with pytest.raises(ValueError, match="projector"):
         validate_training(cfg)
 
 
 def test_training_rejects_missing_top_level_key() -> None:
-    cfg = _baseline_training()
+    cfg = _undefended_training()
     del cfg["grad_accum"]
     with pytest.raises(ValueError, match="grad_accum"):
         validate_training(cfg)
@@ -102,21 +102,21 @@ def test_defenses_rejects_missing_pgd_block() -> None:
 
 
 def test_defenses_rejects_missing_pgd_key() -> None:
-    cfg = _baseline_defenses()
+    cfg = _undefended_defenses()
     del cfg["pgd"]["alpha_ratio"]
     with pytest.raises(ValueError, match="alpha_ratio"):
         validate_defenses(cfg)
 
 
 def test_defenses_rejects_malformed_eps_schedule() -> None:
-    cfg = _baseline_defenses()
+    cfg = _undefended_defenses()
     cfg["pgd"]["eps_schedule"] = [{"epoch_ranges": [1, 2], "eps": 0.0078}]  # plural typo
     with pytest.raises(ValueError, match="epoch_range"):
         validate_defenses(cfg)
 
 
 def test_full_ft_rejects_unknown_freeze_strategy() -> None:
-    cfg = _baseline_full_ft()
+    cfg = _undefended_full_ft()
     cfg["freeze_strategy"] = "everything"
     with pytest.raises(ValueError, match="freeze_strategy"):
         validate_full_ft(cfg)

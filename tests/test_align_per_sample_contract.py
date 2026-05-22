@@ -4,8 +4,8 @@ The legacy public-API test only checks that the symbol exists on
 ``robust_eval``. This test pins the documented runtime contract that
 ``cli/eval_robust.py`` and downstream T3 consumers depend on:
 
-* Returns a 3-tuple ``(baseline_per_sample, defended_per_sample, shared_keys)``.
-* ``baseline_per_sample`` and ``defended_per_sample`` are dicts keyed by the
+* Returns a 3-tuple ``(undefended_per_sample, defended_per_sample, shared_keys)``.
+* ``undefended_per_sample`` and ``defended_per_sample`` are dicts keyed by the
   T3 metric family with parallel-indexed value lists.
 * ``shared_keys`` is the sorted intersection of (sample_id, epsilon,
   attack_mode, seed) on the two record files.
@@ -68,7 +68,7 @@ def paired_records(tmp_path: Path) -> tuple[Path, Path]:
         _record(sample_id="s1", epsilon=0.0157, benign_seq=["a"], attacked_seq=["a"]),
         _record(sample_id="s2", epsilon=0.0157, benign_seq=["a"], attacked_seq=["b"]),
         _record(sample_id="s3", epsilon=0.0314, benign_seq=["a"], attacked_seq=["a"]),
-        # baseline-only — must be dropped from the alignment
+        # undefended-only — must be dropped from the alignment
         _record(sample_id="s4", epsilon=0.0157, benign_seq=["a"], attacked_seq=["a"]),
     ]
     defended = [
@@ -78,7 +78,7 @@ def paired_records(tmp_path: Path) -> tuple[Path, Path]:
         # defended-only — must be dropped from the alignment
         _record(sample_id="s5", epsilon=0.0157, benign_seq=["a"], attacked_seq=["a"]),
     ]
-    base_path = tmp_path / "baseline.jsonl"
+    base_path = tmp_path / "undefended.jsonl"
     def_path = tmp_path / "defended.jsonl"
     _write_jsonl(base_path, base)
     _write_jsonl(def_path, defended)
@@ -94,19 +94,19 @@ def test_returns_three_tuple(paired_records: tuple[Path, Path]) -> None:
 
 def test_per_sample_dicts_carry_t3_metrics(paired_records: tuple[Path, Path]) -> None:
     base_path, def_path = paired_records
-    baseline, defended, _ = align_per_sample(base_path, def_path)
+    undefended, defended, _ = align_per_sample(base_path, def_path)
     for metric in T3_METRICS:
-        assert metric in baseline, f"baseline missing T3 metric {metric}"
+        assert metric in undefended, f"undefended missing T3 metric {metric}"
         assert metric in defended, f"defended missing T3 metric {metric}"
     # parallel indexing — each metric list has the same length on both sides
     for metric in T3_METRICS:
-        assert len(baseline[metric]) == len(defended[metric])
+        assert len(undefended[metric]) == len(defended[metric])
 
 
 def test_intersection_drops_orphans(paired_records: tuple[Path, Path]) -> None:
     base_path, def_path = paired_records
     _, _, shared = align_per_sample(base_path, def_path)
-    # 3 paired samples (s1, s2, s3) survive; s4 baseline-only and s5 defended-only drop.
+    # 3 paired samples (s1, s2, s3) survive; s4 undefended-only and s5 defended-only drop.
     assert len(shared) == 3
     sample_ids = {key[0] for key in shared}
     assert sample_ids == {"s1", "s2", "s3"}
@@ -120,11 +120,11 @@ def test_shared_keys_are_sorted(paired_records: tuple[Path, Path]) -> None:
 
 def test_paired_indices_align(paired_records: tuple[Path, Path]) -> None:
     base_path, def_path = paired_records
-    baseline, defended, shared = align_per_sample(base_path, def_path)
-    # On (s2, 0.0157) baseline disagrees with itself (a vs b → tool_name_acc=0)
+    undefended, defended, shared = align_per_sample(base_path, def_path)
+    # On (s2, 0.0157) undefended disagrees with itself (a vs b → tool_name_acc=0)
     # while defended agrees (a vs a → tool_name_acc=1). Index must be the same.
     s2_idx = next(i for i, k in enumerate(shared) if k[0] == "s2")
-    assert baseline["tool_name_acc"][s2_idx] == 0.0
+    assert undefended["tool_name_acc"][s2_idx] == 0.0
     assert defended["tool_name_acc"][s2_idx] == 1.0
 
 
@@ -133,8 +133,78 @@ def test_empty_intersection_returns_empty_lists(tmp_path: Path) -> None:
     defended = tmp_path / "d.jsonl"
     _write_jsonl(base, [_record(sample_id="x", epsilon=0.01, benign_seq=["a"], attacked_seq=["a"])])
     _write_jsonl(defended, [_record(sample_id="y", epsilon=0.01, benign_seq=["a"], attacked_seq=["a"])])
-    baseline_ps, defended_ps, shared = align_per_sample(base, defended)
+    undefended_ps, defended_ps, shared = align_per_sample(base, defended)
     assert shared == []
     for metric in T3_METRICS:
-        assert baseline_ps[metric] == []
+        assert undefended_ps[metric] == []
         assert defended_ps[metric] == []
+
+
+# ── InternVL3 fallback: tools embedded in final_answer / reasoning_trace ──
+
+
+def _record_internvl3(
+    *,
+    sample_id: str,
+    epsilon: float,
+    attack_mode: str = "apgd_linf",
+    seed: int = 0,
+    benign_text: str = "",
+    attacked_text: str = "",
+    edit_distance_norm: float = 0.0,
+) -> dict:
+    """Simulate InternVL3-format records where tools live in text fields."""
+    return {
+        "sample_id": sample_id,
+        "epsilon": epsilon,
+        "attack_mode": attack_mode,
+        "seed": seed,
+        "edit_distance_norm": edit_distance_norm,
+        "benign": {
+            "tool_sequence": [],
+            "tool_calls": [],
+            "reasoning_trace": benign_text,
+            "final_answer": benign_text,
+        },
+        "attacked": {
+            "tool_sequence": [],
+            "tool_calls": [],
+            "reasoning_trace": attacked_text,
+            "final_answer": attacked_text,
+        },
+    }
+
+
+def test_internvl3_tool_sequence_fallback_match(tmp_path: Path) -> None:
+    """Empty tool_sequence + identical InternVL3 text → acc = 1.0."""
+    text = '{"!tool": "query!guidelines", "args!": {"x": 1}}'
+    u_path = tmp_path / "u.jsonl"
+    d_path = tmp_path / "d.jsonl"
+    _write_jsonl(u_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=text, attacked_text=text)])
+    _write_jsonl(d_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=text, attacked_text=text)])
+    undefended, defended, _ = align_per_sample(u_path, d_path)
+    assert undefended["tool_name_acc"] == [1.0]
+    assert defended["tool_name_acc"] == [1.0]
+
+
+def test_internvl3_tool_sequence_fallback_mismatch(tmp_path: Path) -> None:
+    """Attack breaks output → benign has tools, attacked is empty → acc = 0.0."""
+    benign_text = '{"!tool": "escalate_to_specialist", "args!": {}}'
+    attacked_text = ""
+    u_path = tmp_path / "u.jsonl"
+    d_path = tmp_path / "d.jsonl"
+    _write_jsonl(u_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=benign_text, attacked_text=attacked_text)])
+    _write_jsonl(d_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=benign_text, attacked_text=attacked_text)])
+    undefended, defended, _ = align_per_sample(u_path, d_path)
+    assert undefended["tool_name_acc"] == [0.0]
+    assert defended["tool_name_acc"] == [0.0]
+
+
+def test_internvl3_fallback_never_triggers_when_structured_populated(tmp_path: Path) -> None:
+    """Structured tool_sequence non-empty → InternVL3 parser skipped."""
+    u_path = tmp_path / "u.jsonl"
+    d_path = tmp_path / "d.jsonl"
+    _write_jsonl(u_path, [_record(sample_id="s1", epsilon=0.01, benign_seq=["a", "b"], attacked_seq=["a"])])
+    _write_jsonl(d_path, [_record(sample_id="s1", epsilon=0.01, benign_seq=["a", "b"], attacked_seq=["a"])])
+    undefended, defended, _ = align_per_sample(u_path, d_path)
+    assert undefended["tool_name_acc"] == [0.0]  # ["a","b"] != ["a"]

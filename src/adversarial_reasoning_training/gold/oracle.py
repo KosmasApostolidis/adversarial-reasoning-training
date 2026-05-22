@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +11,8 @@ from typing import Any
 from adversarial_reasoning.agents.base import Trajectory
 
 from .templates import ORACLE_VERSION, TEMPLATES, pick_template_name
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -21,7 +25,7 @@ def generate_trajectory(
     task_id: str,
     sample_id: str,
     metadata: dict[str, Any] | None = None,
-    config: OracleConfig = OracleConfig(),
+    config: OracleConfig | None = None,
 ) -> Trajectory:
     """Return a gold Trajectory for one (task, sample) given metadata.
 
@@ -30,6 +34,8 @@ def generate_trajectory(
     equivocal PI-RADS 3 template with default PSA/density values — useful
     for smoke tests and sample IDs missing from the metadata table.
     """
+    if config is None:
+        config = OracleConfig()
     md = dict(config.metadata_default or {})
     if metadata:
         md.update(metadata)
@@ -53,6 +59,7 @@ def load_metadata_csv(path: str | Path) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     p = Path(path)
     if not p.exists():
+        logger.warning("metadata CSV not found at %s — all samples will use default values", p)
         return out
     with p.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -81,5 +88,8 @@ def _coerce_metadata(row: dict[str, Any]) -> dict[str, Any]:
                 else:
                     md[k] = float(md[k])
             except ValueError:
-                pass
+                logger.warning(
+                    "unparseable metadata field %s=%r for sample %s — using raw value",
+                    k, md[k], row.get("sample_id", row.get("ProxID", "?")),
+                )
     return md

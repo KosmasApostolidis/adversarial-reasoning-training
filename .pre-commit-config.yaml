@@ -6,7 +6,7 @@
 #   pre-commit run --all-files
 #
 # Only ruff is wired up here. mypy stays out of the hook chain until the
-# baseline error count is cleared — running it on every commit while the
+# undefended error count is cleared — running it on every commit while the
 # count is non-zero would be noise, not signal. Promote to a hook in a
 # follow-up PR after src/ is mypy-clean.
 

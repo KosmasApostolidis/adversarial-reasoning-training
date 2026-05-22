@@ -13,6 +13,7 @@ Writes ``runs/<id>/gates/T2.json``.
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from collections.abc import Callable
@@ -69,8 +70,10 @@ def run_t2(
     adv_clean_evaluator: Callable[[], dict[str, float]],
     t1_result_path: Path,
     out_path: Path,
-    thresholds: T2Thresholds = T2Thresholds(),
+    thresholds: T2Thresholds | None = None,
 ) -> T2Result:
+    if thresholds is None:
+        thresholds = T2Thresholds()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     start = time.time()
     ceiling = _read_metrics(t1_result_path, thresholds.metrics)
@@ -117,8 +120,6 @@ def run_t2(
 
 def _build_t2_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for the T2 gate."""
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--ckpt", type=Path, default=None,
