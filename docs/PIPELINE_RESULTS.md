@@ -130,6 +130,20 @@ The previous T3 failure was a measurement artefact: the strict JSON parser could
 
 ---
 
+## Figures
+
+All figures in `figures/` directory (PDF vector + PNG raster):
+
+| Figure | File | Description |
+|--------|------|-------------|
+| Violin Grid | `t3_violin_grid.{png,pdf}` | 3×4 grid: per-model per-metric violin plots with individual samples, means, significance |
+| Delta Bars | `t3_delta_bars.{png,pdf}` | Mean improvement (defended − undefended) with bootstrap 95% CI and Wilcoxon significance |
+| Scatter Matrix | `t3_scatter_matrix.{png,pdf}` | Per-sample defended vs undefended with quadrant counts (↑better ↓worse =same) |
+| Summary Heatmap | `t3_summary_heatmap.{png,pdf}` | Side-by-side: defended mean scores + delta heatmap with significance stars |
+| ECDF | `t3_ecdf_tool_acc.{png,pdf}` | Cumulative distribution of tool_name_acc showing distribution shift under defense |
+
+---
+
 ## Attack Configuration
 
 - Defense: OAAT (One-Attack-at-a-Time) with APGD inner attack
