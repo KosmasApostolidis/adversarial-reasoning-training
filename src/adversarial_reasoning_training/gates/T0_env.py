@@ -62,7 +62,15 @@ def _role_grad_norm(model: torch.nn.Module, patterns: tuple[str, ...]) -> float:
         if not p.requires_grad or p.grad is None:
             continue
         if any(tag in name for tag in patterns):
-            total += float(p.grad.detach().float().pow(2).sum().item())
+            g = p.grad.detach().float()
+            if not torch.isfinite(g).all():
+                logger.warning(
+                    "_role_grad_norm: non-finite gradient in %s; "
+                    "reporting role norm as 0.0 to avoid NaN propagation",
+                    name,
+                )
+                continue
+            total += float(g.pow(2).sum().item())
     return total**0.5
 
 

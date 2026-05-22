@@ -173,7 +173,8 @@ def build_train_dataset(
         metadata_lookup=metadata_lookup,
         n=n,
         synthetic=bool(data_cfg.get("synthetic", False)),
-        config_path=data_cfg.get(
-            "config_path", "../adversarial-reasoning-attacks/configs/tasks.yaml"
+        config_path=data_cfg.get("config_path") or str(
+            Path(__file__).resolve().parent.parent.parent.parent
+            / ".." / "adversarial-reasoning-attacks" / "configs" / "tasks.yaml"
         ),
     )

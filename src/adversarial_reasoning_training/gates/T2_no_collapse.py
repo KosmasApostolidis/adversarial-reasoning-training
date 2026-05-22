@@ -86,10 +86,15 @@ def run_t2(
 
     for key in thresholds.metrics:
         ceil = ceiling.get(key)
-        current_value = float(current.get(key, 0.0))
         if ceil is None:
             notes.append(f"metric {key} missing from T1 result")
             continue
+        if key not in current:
+            notes.append(
+                f"metric {key} missing from evaluator output; "
+                f"treating as 0.0 (ceiling={ceil:.3f})"
+            )
+        current_value = float(current.get(key, 0.0))
         drop = ceil - current_value
         per_metric[key] = {
             "ceiling": ceil,

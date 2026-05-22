@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
 
     src_size_gib = args.src.stat().st_size / (1024 ** 3)
     print(f"loading {args.src} ({src_size_gib:.1f} GiB)")
-    payload = torch.load(args.src, map_location="cpu", weights_only=False)
+    payload = torch.load(args.src, map_location="cpu", weights_only=True)
     if "model_state_dict" not in payload:
         print("ERROR: payload has no model_state_dict", file=sys.stderr)
         return 2
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote {args.dst} ({dst_size_gib:.1f} GiB)")
 
     print("verifying weights-only payload reloads with same tensor count")
-    reloaded = torch.load(args.dst, map_location="cpu", weights_only=False)
+    reloaded = torch.load(args.dst, map_location="cpu", weights_only=True)
     assert len(reloaded["model_state_dict"]) == n_tensors, (
         f"tensor count mismatch: {len(reloaded['model_state_dict'])} vs {n_tensors}"
     )

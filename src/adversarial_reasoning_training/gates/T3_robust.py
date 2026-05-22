@@ -106,6 +106,11 @@ def _wilcoxon_signed_rank(
     diffs = [d - b for b, d in zip(undefended, defended, strict=False)]
     nonzero = [d for d in diffs if d != 0.0]
     if not nonzero:
+        logger.info(
+            "_wilcoxon_signed_rank: all %d paired diffs are zero "
+            "(undefended==defended for every sample); returning (0.0, 1.0).",
+            len(diffs),
+        )
         return 0.0, 1.0
     try:
         stat, p = wilcoxon(nonzero, alternative=alternative)
@@ -179,6 +184,11 @@ def _compute_metric_deltas(
         }
         pvalues.append(p)
         metric_keys.append(key)
+        if math.isnan(p):
+            notes.append(
+                f"{key}: p-value is NaN (statistical test could not "
+                "complete); metric excluded from BH-FDR correction"
+            )
     return per_metric, pvalues, metric_keys, notes
 
 
@@ -189,8 +199,20 @@ def _apply_bh_fdr(
     metric_keys: list[str],
     alpha: float,
 ) -> list[str]:
-    """Annotate per_metric with BH-FDR rejections; return significant keys."""
-    rejected = _bh_fdr(pvalues, alpha)
+    """Annotate per_metric with BH-FDR rejections; return significant keys.
+
+    NaN p-values are filtered out before correction (they correspond to
+    metrics where the statistical test could not complete) and are never
+    marked significant.
+    """
+    # Separate finite from NaN p-values; NaN metrics are never significant.
+    finite_indices = [i for i, pv in enumerate(pvalues) if math.isfinite(pv)]
+    finite_pvalues = [pvalues[i] for i in finite_indices]
+    finite_rejected = _bh_fdr(finite_pvalues, alpha)
+    # Reconstruct full rejected list (NaN → False).
+    rejected = [False] * len(pvalues)
+    for fi, ri in zip(finite_indices, range(len(finite_indices)), strict=False):
+        rejected[fi] = finite_rejected[ri]
     for key, rej in zip(metric_keys, rejected, strict=False):
         per_metric[key]["significant_bh"] = bool(rej)
     return [k for k, r in zip(metric_keys, rejected, strict=False) if r]

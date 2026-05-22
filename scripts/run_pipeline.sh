@@ -223,18 +223,21 @@ assert_hf_dir() {
   }
 
   if ! _hf_dir_complete; then
-    # Auto-materialise: find latest seed0 checkpoint and run export inline.
-    local seed0_ckpt
-    seed0_ckpt=$(ls -t "${RUNS_DIR}/${alias}_main_seed0/ckpt/"*.pt 2>/dev/null | head -1)
-    if [[ -z "$seed0_ckpt" ]]; then
-      echo "FAIL [adv1_${alias}/hf_dir]: hf_dir incomplete and no seed0 .pt found under ${RUNS_DIR}/${alias}_main_seed0/ckpt/" >&2
+    # Auto-materialise: find latest checkpoint across all configured seeds.
+    local ckpt=""
+    for s in "${SEEDS[@]}"; do
+      ckpt=$(ls -t "${RUNS_DIR}/${alias}_main_seed${s}/ckpt/"*.pt 2>/dev/null | head -1)
+      [[ -n "$ckpt" ]] && break
+    done
+    if [[ -z "$ckpt" ]]; then
+      echo "FAIL [adv1_${alias}/hf_dir]: hf_dir incomplete and no .pt found across configured seeds under ${RUNS_DIR}/${alias}_main_seed*/ckpt/" >&2
       return 1
     fi
-    echo "[assert_hf_dir] auto-exporting ${alias} (${seed0_ckpt}) → ${dir}" >&2
+    echo "[assert_hf_dir] auto-exporting ${alias} (${ckpt}) → ${dir}" >&2
     mkdir -p "${dir}"
     if ! python scripts/ckpt_to_hf_dir.py \
          --base-model "$(model_registry_id "${alias}")" \
-         --ckpt "${seed0_ckpt}" \
+         --ckpt "${ckpt}" \
          --out-dir "${dir}"; then
       echo "FAIL [adv1_${alias}/hf_dir]: ckpt_to_hf_dir.py exited non-zero" >&2
       return 1
@@ -327,10 +330,17 @@ print(p)" "$idx" 2>/tmp/.resolve_ckpt.$$.err)" || rel=""
       echo "WARN: corrupt index.json at $idx: ${parse_err//$'\n'/ }; treating as no-ckpt" >&2
     fi
     if [[ -n "$rel" ]]; then
+      local resolved
       if [[ "$rel" = /* ]]; then
-        echo "$rel"
+        resolved="$rel"
       else
-        echo "${REPO_ROOT}/${rel}"
+        resolved="${REPO_ROOT}/${rel}"
+      fi
+      if [[ -f "$resolved" && -s "$resolved" ]]; then
+        echo "$resolved"
+      else
+        echo "WARN: resolve_ckpt: index.json references ${resolved} but file missing/empty — treating as no-ckpt" >&2
+        echo ""
       fi
       return 0
     fi

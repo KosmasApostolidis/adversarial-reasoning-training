@@ -159,6 +159,10 @@ def _parse_tool_calls_from_text(text: str) -> list[dict]:
 
 
 def _record_metrics(record: dict) -> dict[str, float]:
+    # NOTE: This function mutates ``record["benign"]["tool_calls"]`` and
+    # ``record["attacked"]["tool_calls"]`` in-place when the InternVL3
+    # text-fallback triggers. Callers must not rely on those fields
+    # retaining their original values after this function returns.
     benign = record["benign"]
     attacked = record["attacked"]
 
@@ -324,7 +328,13 @@ def records_to_per_sample(path: Path) -> dict[str, list[float]]:
         per_record = _record_metrics(record)
         for key in T3_METRICS:
             metrics[key].append(per_record[key])
-    cleaned, _ = _drop_nan_metrics(metrics)
+    cleaned, dropped = _drop_nan_metrics(metrics)
+    if dropped:
+        logger.warning(
+            "records_to_per_sample: dropped metrics %s from %s "
+            "(all values were NaN — check record schema or parser)",
+            sorted(dropped), path.name,
+        )
     return cleaned
 
 

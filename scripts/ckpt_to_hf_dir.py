@@ -57,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     vlm = load_hf_vlm(args.base_model, config_path=str(args.config_path))
 
     print(f"loading defended state_dict from {args.ckpt}")
-    payload = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+    payload = torch.load(args.ckpt, map_location="cpu", weights_only=True)
     state_dict = payload["model_state_dict"]
 
     missing, unexpected = vlm.model.load_state_dict(state_dict, strict=False)
