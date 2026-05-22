@@ -109,10 +109,10 @@ def write_gate_result(path: str | Path, payload: Mapping[str, Any]) -> Path:
             json.dump(dict(payload), f, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        Path(tmp_path).chmod(0o600)
         os.replace(tmp_path, target)
-    except BaseException:
+    finally:
         Path(tmp_path).unlink(missing_ok=True)
-        raise
     return target
 
 

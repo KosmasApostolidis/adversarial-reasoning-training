@@ -10,9 +10,11 @@ from ..utils.paths import normalize_run_dir
 from ..utils.seed import seed_everything
 
 
-def setup_seed(seed: int, *, deterministic: bool = True) -> None:
+def setup_seed(
+    seed: int, *, deterministic: bool = True, warn_only: bool = False
+) -> None:
     """Seed Python/NumPy/PyTorch via ``utils.seed.seed_everything``."""
-    seed_everything(seed, deterministic=deterministic)
+    seed_everything(seed, deterministic=deterministic, warn_only=warn_only)
 
 
 def setup_device(name: str = "cuda") -> torch.device:

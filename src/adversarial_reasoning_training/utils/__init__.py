@@ -5,7 +5,6 @@ from .constants import (
     DEFAULT_PGD_ALPHA_RATIO,
     EPS_2_255,
     EPS_4_255,
-    EPS_8_255,
 )
 from .hashing import (
     gold_cache_key,
@@ -28,7 +27,6 @@ __all__ = [
     "DEFAULT_PGD_ALPHA_RATIO",
     "EPS_2_255",
     "EPS_4_255",
-    "EPS_8_255",
     "MemoryStats",
     "assert_peak_under",
     "current_memory_stats",

@@ -15,6 +15,7 @@ Writes ``runs/<id>/gates/T0.json`` with a pass/fail verdict.
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from collections.abc import Callable
@@ -26,7 +27,7 @@ import torch
 
 from ..attacks.inner_pgd import InnerPgdConfig, run_inner_pgd
 from ..data.collator import TFCollator
-from ..losses.selector import build_loss, from_cfg_dict
+from ..losses.selector import LossCallResult, build_loss, from_cfg_dict
 from ..trainer.freeze import _LM_PATTERNS, _PROJECTOR_PATTERNS, _VIT_PATTERNS
 from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
@@ -275,8 +276,6 @@ def run_t0(
 
 def _build_t0_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser for the T0 gate."""
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--defenses", type=Path, default=Path("configs/defenses.yaml"))
@@ -302,7 +301,7 @@ def _run_t0_attack(
     device: torch.device,
     epsilon: float,
     pgd_steps: int,
-) -> tuple[Any, torch.Tensor, LossOutput]:
+) -> tuple[Any, torch.Tensor, LossCallResult]:
     """Create sample, run inner PGD, return (batch, adversarial image, loss_fn)."""
     sample = sample_factory()
     batch = collator([sample]).to(device)

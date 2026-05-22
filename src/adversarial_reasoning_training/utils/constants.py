@@ -16,7 +16,6 @@ BYTE_SCALE: float = 1.0 / 255.0
 # Standard ε-ball radii for PGD adversarial training/eval.
 EPS_2_255: float = 2.0 * BYTE_SCALE
 EPS_4_255: float = 4.0 * BYTE_SCALE
-EPS_8_255: float = 8.0 * BYTE_SCALE
 
 # PGD inner-step ratio: α = ratio · ε. 0.25 is the canonical value used by
 # both inner_pgd.InnerPGDConfig and the AdvTrainer / CLI defaults.
@@ -37,9 +36,6 @@ DEFAULT_GATE_CONFIG_PATHS: dict[str, str] = {
     "data": "configs/data.yaml",
     "gold": "configs/gold.yaml",
 }
-
-# Default PGD inner steps used by gates and CLI ablation configs.
-PGD_STEPS_DEFAULT: int = 7
 
 # Default gradient accumulation steps used by gate CLI defaults.
 GRAD_ACCUM_DEFAULT: int = 8
@@ -69,11 +65,7 @@ __all__ = [
     "DEFAULT_PGD_ALPHA_RATIO",
     "EPS_2_255",
     "EPS_4_255",
-    "EPS_8_255",
-    "EVAL_EVERY_DEFAULT",
     "GRAD_ACCUM_DEFAULT",
     "GRAD_CLIP_NORM",
-    "LOG_EVERY_DEFAULT",
-    "PGD_STEPS_DEFAULT",
     "VLMFamily",
 ]

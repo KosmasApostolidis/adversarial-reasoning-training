@@ -18,6 +18,7 @@ def normalize_run_dir(path: str | Path) -> Path:
     """
     resolved = Path(path).expanduser().resolve()
     resolved.mkdir(parents=True, exist_ok=True)
+    resolved.chmod(0o700)
     return resolved
 
 
@@ -29,4 +30,5 @@ def ensure_parent(path: str | Path) -> Path:
     """
     resolved = Path(path).expanduser().resolve()
     resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.parent.chmod(0o700)
     return resolved

@@ -30,12 +30,12 @@ def _atomic_torch_save(payload: dict[str, Any], target: Path) -> None:
     tmp_path = Path(tmp_name)
     try:
         torch.save(payload, tmp_path)
+        tmp_path.chmod(0o600)
         with tmp_path.open("rb") as fh:
             os.fsync(fh.fileno())
         os.replace(tmp_path, target)
-    except BaseException:
+    finally:
         tmp_path.unlink(missing_ok=True)
-        raise
 
 
 @dataclass

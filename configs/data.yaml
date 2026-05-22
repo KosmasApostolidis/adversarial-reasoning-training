@@ -21,6 +21,8 @@ n_dev: 16                   # cap dev for fast eval
 metadata_csv: null
 
 # Loader knobs
-num_workers: 0              # B=1 only; multiprocessing not worth the overhead
+# NOTE: num_workers, shuffle, pin_memory are set at the DataLoader
+# construction site — the YAML values below are advisory only.
+num_workers: 0
 shuffle: true
 pin_memory: true

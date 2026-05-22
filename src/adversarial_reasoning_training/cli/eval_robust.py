@@ -2,19 +2,19 @@
 
 Reads two ``records.jsonl`` files emitted by the attacks-repo runner
 (``python -m adversarial_reasoning.runner --mode pgd ...``) — one
-from the undefended baseline model, one from the adversarially
+from the undefended model, one from the adversarially
 fine-tuned model — converts them to T3-compatible per-sample dicts
 under the *vs-benign-on-same-model* semantic, and runs the T3
 robustness gate.
 
 Usage:
     art-eval-robust \\
-        --baseline-records runs/baseline_qwen/records.jsonl \\
+        --undefended-records runs/undefended_qwen/records.jsonl \\
         --defended-records runs/adv1_qwen/records.jsonl \\
         --out-dir runs/adv1_qwen/gates/
 
 Writes:
-    <out-dir>/baseline_per_sample.json
+    <out-dir>/undefended_per_sample.json
     <out-dir>/defended_per_sample.json
     <out-dir>/T3.json
 """
@@ -34,7 +34,7 @@ from .runtime import setup_run_dir
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="art-eval-robust", description=__doc__)
     parser.add_argument(
-        "--baseline-records",
+        "--undefended-records",
         type=Path,
         required=True,
         help="records.jsonl emitted by the attacks runner against the undefended model",
@@ -62,13 +62,13 @@ def main(argv: list[str] | None = None) -> int:
 
     out_dir = setup_run_dir(args.out_dir)
 
-    baseline, defended, shared, dropped = align_per_sample_with_drops(
-        args.baseline_records, args.defended_records
+    undefended, defended, shared, dropped = align_per_sample_with_drops(
+        args.undefended_records, args.defended_records
     )
     if not shared:
         print(
             "ERROR: no overlapping (sample_id, epsilon, attack_mode, seed) keys "
-            "between baseline and defended records.",
+            "between undefended and defended records.",
             file=sys.stderr,
         )
         return 2
@@ -79,11 +79,11 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    save_per_sample(out_dir / "baseline_per_sample.json", baseline)
+    save_per_sample(out_dir / "undefended_per_sample.json", undefended)
     save_per_sample(out_dir / "defended_per_sample.json", defended)
 
     result = run_t3(
-        baseline_per_sample=baseline,
+        undefended_per_sample=undefended,
         defended_per_sample=defended,
         out_path=out_dir / "T3.json",
         thresholds=T3Thresholds(

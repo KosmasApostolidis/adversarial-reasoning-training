@@ -196,7 +196,7 @@ In rough priority order:
    `configs/training.yaml` via the trainer's `eps_schedule`
    field). Target: complete one epoch and verify dev
    `tool_name_acc` stays within ≈ 5 pp of the T1 clean-FT
-   baseline.
+   undefended.
 4. **Wire T3** to the attacks-repo robust-eval runner and produce
    the first defended-vs-undefended comparison plot (BH-FDR over
    PGD budgets).

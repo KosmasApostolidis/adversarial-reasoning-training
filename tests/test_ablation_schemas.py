@@ -10,7 +10,7 @@ Tests assert:
 * every YAML parses,
 * loss-axis configs match the training.yaml schema,
 * defenses-axis configs match the defenses.yaml schema and reference an
-  ε baseline that does not silently confound the ablation,
+  ε undefended that does not silently confound the ablation,
 * freeze-axis configs match the full_ft.yaml schema and respect the T0
   peak-memory ceiling.
 """
@@ -50,17 +50,17 @@ VALID_FREEZE_STRATEGIES = {"none", "vit_only", "projector_only", "lm_only"}
 
 
 @pytest.fixture(scope="module")
-def baseline_training() -> dict:
+def undefended_training() -> dict:
     return load_yaml(CONFIGS / "training.yaml")
 
 
 @pytest.fixture(scope="module")
-def baseline_defenses() -> dict:
+def undefended_defenses() -> dict:
     return load_yaml(CONFIGS / "defenses.yaml")
 
 
 @pytest.fixture(scope="module")
-def baseline_full_ft() -> dict:
+def undefended_full_ft() -> dict:
     return load_yaml(CONFIGS / "full_ft.yaml")
 
 
@@ -79,13 +79,13 @@ def test_loss_axis_yaml_matches_training_schema(name: str) -> None:
 
 @pytest.mark.parametrize("name", LOSS_AXIS_FILES)
 def test_loss_axis_epochs_anchored_to_curriculum(
-    name: str, baseline_defenses: dict,
+    name: str, undefended_defenses: dict,
 ) -> None:
     """Adv-FT epochs must not exceed the eps_schedule end so the
     curriculum's strongest ε is actually reached."""
     cfg = load_yaml(ABLATIONS / name)
     schedule_max = max(
-        entry["epoch_range"][1] for entry in baseline_defenses["pgd"]["eps_schedule"]
+        entry["epoch_range"][1] for entry in undefended_defenses["pgd"]["eps_schedule"]
     )
     assert cfg["epochs"] <= schedule_max, (
         f"{name}: epochs={cfg['epochs']} exceeds eps_schedule max={schedule_max}; "
@@ -104,13 +104,13 @@ def test_defenses_axis_yaml_matches_defenses_schema(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", BETA_AXIS_FILES)
-def test_beta_files_share_eps_with_baseline(
-    name: str, baseline_defenses: dict,
+def test_beta_files_share_eps_with_undefended(
+    name: str, undefended_defenses: dict,
 ) -> None:
     """The β sweep must vary only TRADES.β. Verify the PGD block matches
-    the baseline so β cannot be confounded with an ε change."""
+    the undefended so β cannot be confounded with an ε change."""
     cfg = load_yaml(ABLATIONS / name)
-    base_pgd = baseline_defenses["pgd"]
+    base_pgd = undefended_defenses["pgd"]
     assert cfg["pgd"]["default_eps"] == base_pgd["default_eps"], (
         f"{name}: default_eps drift confounds the β ablation"
     )
@@ -140,16 +140,16 @@ def test_eps_mid_only_collapses_to_single_step_at_mid_budget() -> None:
     assert cfg["pgd"]["default_eps"] == pytest.approx(0.0157)
 
 
-def test_eps_reverse_inverts_baseline_curriculum(baseline_defenses: dict) -> None:
+def test_eps_reverse_inverts_undefended_curriculum(undefended_defenses: dict) -> None:
     """Phase 6 Tier C #11 — reverse curriculum must visit the same eps
-    values as the baseline forward curriculum but in inverted order so
+    values as the undefended forward curriculum but in inverted order so
     epoch 1 uses the strongest budget instead of the weakest."""
     cfg = load_yaml(ABLATIONS / "defenses_eps_reverse.yaml")
     sched = cfg["pgd"]["eps_schedule"]
-    base_eps_in_order = [e["eps"] for e in baseline_defenses["pgd"]["eps_schedule"]]
+    base_eps_in_order = [e["eps"] for e in undefended_defenses["pgd"]["eps_schedule"]]
     reverse_eps_in_order = [e["eps"] for e in sched]
     assert reverse_eps_in_order == list(reversed(base_eps_in_order)), (
-        "defenses_eps_reverse.yaml must mirror baseline eps values in reverse "
+        "defenses_eps_reverse.yaml must mirror undefended eps values in reverse "
         "(strict 8/255 → 4/255 → 2/255)"
     )
     # Epoch ranges must still cover [1, training.epochs] without gaps.
@@ -158,11 +158,11 @@ def test_eps_reverse_inverts_baseline_curriculum(baseline_defenses: dict) -> Non
         lo, hi = entry["epoch_range"]
         covered.update(range(lo, hi + 1))
     base_covered = set()
-    for entry in baseline_defenses["pgd"]["eps_schedule"]:
+    for entry in undefended_defenses["pgd"]["eps_schedule"]:
         lo, hi = entry["epoch_range"]
         base_covered.update(range(lo, hi + 1))
     assert covered == base_covered, (
-        f"defenses_eps_reverse.yaml epoch coverage {covered} differs from baseline {base_covered}; "
+        f"defenses_eps_reverse.yaml epoch coverage {covered} differs from undefended {base_covered}; "
         "reverse curriculum would silently fall back to default_eps for uncovered epochs"
     )
 
@@ -182,13 +182,13 @@ def test_loss_traj_only_zeros_trades_task_weight() -> None:
 
 
 def test_loss_traj_only_keeps_canonical_eps_curriculum(
-    baseline_defenses: dict,
+    undefended_defenses: dict,
 ) -> None:
     """The traj-only cell varies only the loss term — its ε schedule
-    must match the baseline forward curriculum so the ablation isolates
+    must match the undefended forward curriculum so the ablation isolates
     `task_weight` rather than confounding it with an ε change."""
     cfg = load_yaml(ABLATIONS / TRAJ_ONLY_FILE)
-    base_pgd = baseline_defenses["pgd"]
+    base_pgd = undefended_defenses["pgd"]
     assert cfg["pgd"]["eps_schedule"] == base_pgd["eps_schedule"]
     assert cfg["pgd"]["default_eps"] == base_pgd["default_eps"]
     assert cfg["pgd"]["steps"] == base_pgd["steps"]
@@ -196,7 +196,7 @@ def test_loss_traj_only_keeps_canonical_eps_curriculum(
 
 @pytest.mark.parametrize("name", FREEZE_AXIS_FILES)
 def test_freeze_axis_yaml_matches_full_ft_schema(
-    name: str, baseline_full_ft: dict,
+    name: str, undefended_full_ft: dict,
 ) -> None:
     cfg = load_yaml(ABLATIONS / name)
     missing = FULL_FT_REQUIRED_KEYS - cfg.keys()
@@ -204,51 +204,51 @@ def test_freeze_axis_yaml_matches_full_ft_schema(
     assert cfg["freeze_strategy"] in VALID_FREEZE_STRATEGIES, (
         f"{name}: invalid freeze_strategy {cfg['freeze_strategy']!r}"
     )
-    # Memory ceiling must match the baseline so peak-mem comparisons
+    # Memory ceiling must match the undefended so peak-mem comparisons
     # across freeze cells are apples-to-apples.
-    assert cfg["memory"]["peak_memory_limit_gb"] == baseline_full_ft["memory"][
+    assert cfg["memory"]["peak_memory_limit_gb"] == undefended_full_ft["memory"][
         "peak_memory_limit_gb"
     ], f"{name}: peak_memory_limit_gb drift confounds the freeze comparison"
 
 
 def test_freeze_axis_actually_changes_strategy() -> None:
-    """Each freeze ablation must differ from the baseline freeze_strategy."""
+    """Each freeze ablation must differ from the undefended freeze_strategy."""
     base = load_yaml(CONFIGS / "full_ft.yaml")["freeze_strategy"]
     for name in FREEZE_AXIS_FILES:
         cfg = load_yaml(ABLATIONS / name)
         assert cfg["freeze_strategy"] != base, (
-            f"{name}: freeze_strategy unchanged from baseline ({base}); "
+            f"{name}: freeze_strategy unchanged from undefended ({base}); "
             "the ablation toggles nothing"
         )
 
 
 def test_loss_axis_actually_changes_defense() -> None:
-    """Each loss ablation must differ from the baseline defense selector.
+    """Each loss ablation must differ from the undefended defense selector.
 
-    Baseline changed to pgd_at (commit 9995f25); loss_pgd_at now matches
-    the new default but remains a valid ablation against the old trades baseline.
+    Undefended changed to pgd_at (commit 9995f25); loss_pgd_at now matches
+    the new default but remains a valid ablation against the old trades undefended.
     """
     base = load_yaml(CONFIGS / "training.yaml")["defense"]
     for name in LOSS_AXIS_FILES:
         cfg = load_yaml(ABLATIONS / name)
         if name == "loss_pgd_at.yaml" and base == "pgd_at":
-            continue  # baseline changed to pgd_at — this ablation now matches default
+            continue  # undefended changed to pgd_at — this ablation now matches default
         assert cfg["defense"] != base, (
-            f"{name}: defense unchanged from baseline ({base}); "
+            f"{name}: defense unchanged from undefended ({base}); "
             "the ablation toggles nothing"
         )
 
 
-def test_baseline_training_curriculum_alignment(
-    baseline_training: dict, baseline_defenses: dict,
+def test_undefended_training_curriculum_alignment(
+    undefended_training: dict, undefended_defenses: dict,
 ) -> None:
     """Regression guard for the budget-parity bug fixed in this branch:
     bumping epochs past the curriculum endpoint silently makes adv-FT
     train at default_eps for the tail epochs."""
     schedule_max = max(
-        entry["epoch_range"][1] for entry in baseline_defenses["pgd"]["eps_schedule"]
+        entry["epoch_range"][1] for entry in undefended_defenses["pgd"]["eps_schedule"]
     )
-    assert baseline_training["epochs"] <= schedule_max, (
-        f"training.yaml epochs={baseline_training['epochs']} > eps_schedule max={schedule_max}; "
+    assert undefended_training["epochs"] <= schedule_max, (
+        f"training.yaml epochs={undefended_training['epochs']} > eps_schedule max={schedule_max}; "
         "extend defenses.yaml::pgd.eps_schedule before raising epochs"
     )

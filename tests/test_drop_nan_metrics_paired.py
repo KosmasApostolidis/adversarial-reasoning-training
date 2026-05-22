@@ -8,7 +8,7 @@ Two bugs the current implementation would silently exhibit:
   not record which metric(s) were dropped, so a passing T3 with 3/4
   metrics quietly missing looks identical to a passing T3 with all 4.
 * **H1** — paired-alignment poisoning. ``align_per_sample`` calls
-  ``_drop_nan_metrics`` on baseline and defended **independently**.
+  ``_drop_nan_metrics`` on undefended and defended **independently**.
   If a NaN exists only on one side, the other side's array stays
   populated → downstream consumers compare empty vs populated lists
   with mismatched lengths and undefined Wilcoxon behaviour.
@@ -91,17 +91,17 @@ def test_drop_nan_metrics_returns_dropped_names() -> None:
 def test_align_per_sample_drops_metric_from_both_sides_when_either_has_nan(
     tmp_path: Path,
 ) -> None:
-    """H1: a NaN on the baseline side must cause that metric to be
+    """H1: a NaN on the undefended side must cause that metric to be
     emptied on the defended side too — keeping paired arrays
     length-matched. The current code drops sides independently and
     leaves a populated list paired with an empty one.
     """
-    baseline_path = tmp_path / "baseline.jsonl"
+    undefended_path = tmp_path / "undefended.jsonl"
     defended_path = tmp_path / "defended.jsonl"
 
-    # sample_1 baseline lacks tool_calls (legacy schema) → args_iou=NaN.
+    # sample_1 undefended lacks tool_calls (legacy schema) → args_iou=NaN.
     # Both sides have valid tool_calls for sample_2 → args_iou is finite.
-    baseline = [
+    undefended = [
         _record("s1", benign_calls=None, attacked_calls=None),
         _record(
             "s2",
@@ -121,15 +121,15 @@ def test_align_per_sample_drops_metric_from_both_sides_when_either_has_nan(
             attacked_calls=[{"name": "t_a", "args": {"k": 1}}],
         ),
     ]
-    _write_records(baseline_path, baseline)
+    _write_records(undefended_path, undefended)
     _write_records(defended_path, defended)
 
-    b, d, shared = re_mod.align_per_sample(baseline_path, defended_path)
+    b, d, shared = re_mod.align_per_sample(undefended_path, defended_path)
     assert len(shared) == 2
 
     # Even though defended-side args_iou values are all finite, the
-    # presence of a NaN on baseline must drop args_iou from BOTH sides.
-    assert b["args_iou"] == [], "baseline args_iou must be empty (had NaN)"
+    # presence of a NaN on undefended must drop args_iou from BOTH sides.
+    assert b["args_iou"] == [], "undefended args_iou must be empty (had NaN)"
     assert d["args_iou"] == [], (
         "defended args_iou must ALSO be empty for paired alignment, "
         "even though its own values were finite"
@@ -145,9 +145,9 @@ def test_align_per_sample_with_drops_exposes_dropped_set(
     tmp_path: Path,
 ) -> None:
     """C5: exposes the dropped-metric set so the T3 layer can record it."""
-    baseline_path = tmp_path / "baseline.jsonl"
+    undefended_path = tmp_path / "undefended.jsonl"
     defended_path = tmp_path / "defended.jsonl"
-    _write_records(baseline_path, [_record("s1", benign_calls=None)])
+    _write_records(undefended_path, [_record("s1", benign_calls=None)])
     _write_records(
         defended_path,
         [
@@ -164,7 +164,7 @@ def test_align_per_sample_with_drops_exposes_dropped_set(
         "(cli/eval_robust.py, T3 gate) can record dropped metric names"
     )
     b, d, _shared, dropped = re_mod.align_per_sample_with_drops(
-        baseline_path, defended_path
+        undefended_path, defended_path
     )
     assert "args_iou" in dropped
     assert b["args_iou"] == [] and d["args_iou"] == []

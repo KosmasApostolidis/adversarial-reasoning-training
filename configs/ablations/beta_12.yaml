@@ -2,7 +2,7 @@
 #
 # Diff vs configs/defenses.yaml: trades.beta_start = beta_end = 12.0
 # (no annealing; constant high weight, 2x the upper bound of the
-# baseline 6 -> 3 anneal range).
+# undefended 6 -> 3 anneal range).
 # Pass via `--defenses configs/ablations/beta_12.yaml` to art-train.
 
 _extends: ../defenses.yaml

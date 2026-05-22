@@ -124,16 +124,16 @@ def test_align_per_sample_intersects_on_pair_key(tmp_path: Path) -> None:
         _record_from(EvalRecord("s1", 0.0078, 0.1, ["a"], ["a"], "foo", "foo")),
         _record_from(EvalRecord("s2", 0.0078, 0.0, ["a"], ["a"], "foo", "foo")),
     ]
-    base_path = tmp_path / "baseline.jsonl"
+    base_path = tmp_path / "undefended.jsonl"
     def_path = tmp_path / "defended.jsonl"
     _write_jsonl(base_path, base)
     _write_jsonl(def_path, defended)
 
-    baseline_ps, defended_ps, shared = align_per_sample(base_path, def_path)
+    undefended_ps, defended_ps, shared = align_per_sample(base_path, def_path)
 
     assert len(shared) == 2
     assert [k[0] for k in shared] == ["s1", "s2"]
-    assert baseline_ps["tool_name_acc"] == [0.0, 0.0]
+    assert undefended_ps["tool_name_acc"] == [0.0, 0.0]
     assert defended_ps["tool_name_acc"] == [1.0, 1.0]
 
 
@@ -256,17 +256,17 @@ def test_t3_pass_end_to_end_under_clean_robustness(tmp_path: Path) -> None:
         ))
         for i in range(8)
     ]
-    base_path = tmp_path / "baseline.jsonl"
+    base_path = tmp_path / "undefended.jsonl"
     def_path = tmp_path / "defended.jsonl"
     _write_jsonl(base_path, base_recs)
     _write_jsonl(def_path, def_recs)
 
-    baseline_ps, defended_ps, shared = align_per_sample(base_path, def_path)
+    undefended_ps, defended_ps, shared = align_per_sample(base_path, def_path)
     assert len(shared) == 8
 
     out_path = tmp_path / "T3.json"
     result = run_t3(
-        undefended_per_sample=baseline_ps,
+        undefended_per_sample=undefended_ps,
         defended_per_sample=defended_ps,
         out_path=out_path,
         thresholds=T3Thresholds(
