@@ -115,5 +115,5 @@ def test_run_t2_evaluator_returning_none_treated_as_zero(tmp_path: Path) -> None
         out_path=tmp_path / "T2.json",
         thresholds=T2Thresholds(metrics=("tool_name_acc",)),
     )
-    # Null evaluator → NaN current — guaranteed to fail regardless of ceiling.
+    # Empty current → zero — guaranteed to fail at any nonzero ceiling.
     assert result.passed is False

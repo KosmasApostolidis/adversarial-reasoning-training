@@ -58,22 +58,19 @@ class T0Result:
 
 def _role_grad_norm(model: torch.nn.Module, patterns: tuple[str, ...]) -> float:
     total = 0.0
-    nonfinite_count = 0
     for name, p in model.named_parameters():
         if not p.requires_grad or p.grad is None:
             continue
         if any(tag in name for tag in patterns):
             g = p.grad.detach().float()
             if not torch.isfinite(g).all():
-                nonfinite_count += 1
+                logger.warning(
+                    "_role_grad_norm: non-finite gradient in %s; "
+                    "reporting role norm as 0.0 to avoid NaN propagation",
+                    name,
+                )
                 continue
             total += float(g.pow(2).sum().item())
-    if nonfinite_count:
-        logger.warning(
-            "_role_grad_norm: %d parameter(s) with non-finite gradient "
-            "in role %r — excluded from norm computation",
-            nonfinite_count, role_name,
-        )
     return total**0.5
 
 
@@ -301,7 +298,6 @@ def _build_t0_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--epsilon", type=float, default=EPS_4_255)
     parser.add_argument("--pgd-steps", type=int, default=3)
-    parser.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -338,12 +334,9 @@ def _main() -> int:
     ``python -m adversarial_reasoning_training.gates.T0_env --model qwen3_vl_8b ...``
     """
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
-    from ..utils.seed import seed_everything
 
     parser = _build_t0_parser()
     args = parser.parse_args()
-
-    seed_everything(args.seed)
 
     defense_cfg = load_gate_yaml(args.defenses, allow_empty=False)
     data_cfg = load_gate_yaml(args.data, allow_empty=False)

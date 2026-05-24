@@ -5,9 +5,6 @@
 # populated by scripts/make_gold_trajectories.py.
 
 task_id: prostate_mri_workup
-# NOTE: relative to CWD.  The pipeline cd's to REPO_ROOT first.
-# Running from another directory (e.g. cd scripts/ && python -m ...)
-# will resolve this path incorrectly.
 config_path: ../adversarial-reasoning-attacks/configs/tasks.yaml
 train_split: train
 dev_split: dev
@@ -23,11 +20,9 @@ n_dev: 16                   # cap dev for fast eval
 # Empty / missing → metadata_lookup = {} (oracle uses defaults).
 metadata_csv: null
 
-# Loader knobs — ADVISORY ONLY.
-# The training loop hardcodes batch_size=1, shuffle=True, and does not
-# read num_workers/pin_memory from this file.  These values document the
-# intended configuration; to change actual DataLoader behaviour, edit
-# AdvTrainer.fit() or the gate's DataLoader construction site.
+# Loader knobs
+# NOTE: num_workers, shuffle, pin_memory are set at the DataLoader
+# construction site — the YAML values below are advisory only.
 num_workers: 0
 shuffle: true
 pin_memory: true

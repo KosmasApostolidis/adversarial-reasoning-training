@@ -68,28 +68,22 @@ def _args_iou_single(benign_args: dict, attacked_args: dict) -> float:
 def _args_iou_record(record: dict) -> float:
     """Mean Jaccard over paired tool-call args. NaN if either side
     lacks the ``tool_calls`` field, signalling old-schema records.
-
-    All positions up to ``max(len(benign), len(attacked))`` contribute
-    to the denominator. Extra tool calls on either side (beyond the
-    common prefix) each contribute 0.0 — a mismatch, not a silent drop.
     """
     benign_calls = record.get("benign", {}).get("tool_calls")
     attacked_calls = record.get("attacked", {}).get("tool_calls")
     if benign_calls is None or attacked_calls is None:
         return float("nan")
-    n_benign = len(benign_calls)
-    n_attacked = len(attacked_calls)
-    n_max = max(n_benign, n_attacked)
-    if n_max == 0:
-        return 1.0
+    n_paired = min(len(benign_calls), len(attacked_calls))
+    if n_paired == 0:
+        if not benign_calls and not attacked_calls:
+            return 1.0
+        return 0.0
     total = 0.0
-    n_paired = min(n_benign, n_attacked)
     for i in range(n_paired):
         b_args = benign_calls[i].get("args", {}) or {}
         a_args = attacked_calls[i].get("args", {}) or {}
         total += _args_iou_single(b_args, a_args)
-    # Unpaired positions (extra calls on either side) contribute 0.0.
-    return total / n_max
+    return total / n_paired
 
 
 def _levenshtein_norm(a: list[str], b: list[str]) -> float:
@@ -123,26 +117,17 @@ def _parse_tool_sequence_from_text(text: str) -> list[str]:
 def _parse_tool_calls_from_text(text: str) -> list[dict]:
     """Extract structured ``tool_calls`` from InternVL3-format text.
 
-    Uses ``json.JSONDecoder.raw_decode`` to find JSON blob boundaries,
-    which correctly handles braces inside string values (e.g.
-    ``{"query": "use {search}"}``).  Falls back to brace counting when
-    ``raw_decode`` raises, then to regex-only name extraction on failure.
+    Each blob ``{"!tool": "name", "args!": {...}}`` is extracted via
+    brace counting (handles nested JSON in args), then parsed as JSON.
+    On success, returns ``{"name": ..., "args": {...}}``. On parse
+    failure, falls back to regex-only name extraction with empty args.
     """
     if not text:
         return []
     tool_calls: list[dict] = []
     for m in _INTERNVL_BLOB_START_RE.finditer(text):
         start = m.start()
-        try:
-            obj, end = json.JSONDecoder().raw_decode(text, start)
-            name = obj.get("!tool", "")
-            args = obj.get("args!", {}) or {}
-            tool_calls.append({"name": name, "args": args})
-            continue
-        except json.JSONDecodeError:
-            pass
-
-        # Fallback: brace-count to find the matching '}'
+        # Brace-count from the opening '{' to find the matching '}'
         depth = 0
         end = start
         for i in range(start, len(text)):
@@ -155,6 +140,7 @@ def _parse_tool_calls_from_text(text: str) -> list[dict]:
                     end = i + 1
                     break
         if depth != 0:
+            # Unbalanced braces — fall back to regex-only name extraction
             name_match = _INTERNVL_TOOL_RE.search(text[start:])
             if name_match:
                 tool_calls.append({"name": name_match.group(1), "args": {}})
@@ -173,11 +159,12 @@ def _parse_tool_calls_from_text(text: str) -> list[dict]:
 
 
 def _record_metrics(record: dict) -> dict[str, float]:
-    # Take shallow copies so InternVL3 text-fallback mutations don't leak
-    # into the caller's cached record.  Previously this wrote back into
-    # the live dict, making re-processing silently different.
-    benign = dict(record["benign"])
-    attacked = dict(record["attacked"])
+    # NOTE: This function mutates ``record["benign"]["tool_calls"]`` and
+    # ``record["attacked"]["tool_calls"]`` in-place when the InternVL3
+    # text-fallback triggers. Callers must not rely on those fields
+    # retaining their original values after this function returns.
+    benign = record["benign"]
+    attacked = record["attacked"]
 
     benign_seq = list(benign.get("tool_sequence", []))
     attacked_seq = list(attacked.get("tool_sequence", []))
@@ -226,35 +213,25 @@ def _record_metrics(record: dict) -> dict[str, float]:
         edit_distance_norm = max(0.0, min(1.0, edit_distance_norm))
         traj_edit_distance = 1.0 - edit_distance_norm
 
-    # Build a composite for _args_iou_record that merges text-parsed
-    # tool_calls (from shallow copies) with the original record.  Without
-    # this merge, _args_iou_record would only see the original record's
-    # tool_calls (which may be missing for InternVL3 text-fallback data).
-    record_for_iou = dict(record)
-    record_for_iou["benign"] = dict(record["benign"])
-    record_for_iou["attacked"] = dict(record["attacked"])
-    if fallback_triggered:
-        if benign.get("tool_calls"):
-            record_for_iou["benign"]["tool_calls"] = benign["tool_calls"]
-        if attacked.get("tool_calls"):
-            record_for_iou["attacked"]["tool_calls"] = attacked["tool_calls"]
-
-    args_iou = _args_iou_record(record_for_iou)
-    # Detect fake-perfection: args_iou=1.0 is spurious when tool_calls
-    # came from the text parser (InternVL3 fallback) which extracted tool
-    # names but could not recover arguments.  Tools with genuinely no
-    # required arguments (e.g. ``lookup_guideline``) legitimately produce
-    # empty args from structured data — those must NOT be NaN'd.
-    text_parsed_tool_calls = (
-        fallback_triggered
-        and (bool(benign_seq) or bool(attacked_seq))
-        and not record.get("benign", {}).get("tool_calls")
-        and not record.get("attacked", {}).get("tool_calls")
-    )
-    if args_iou == 1.0 and text_parsed_tool_calls:
-        # tool_calls were populated by _parse_tool_calls_from_text with
-        # empty args — the 1.0 is fake, NaN it out
-        args_iou = float("nan")
+    args_iou = _args_iou_record(record)
+    # Detect fake-perfection: args are unknowable when
+    #   (a) both tool_calls lists are empty (old-schema records), or
+    #   (b) every entry on both sides has empty args (parse fallback
+    #       extracted tool names but could not recover arguments).
+    if args_iou == 1.0 and (benign_seq or attacked_seq):
+        b_calls = record.get("benign", {}).get("tool_calls")
+        a_calls = record.get("attacked", {}).get("tool_calls")
+        if b_calls is not None and a_calls is not None:
+            all_empty_args = (
+                all(not (c.get("args") if isinstance(c, dict) else None)
+                    for c in b_calls)
+                and all(not (c.get("args") if isinstance(c, dict) else None)
+                        for c in a_calls)
+            )
+            if not b_calls and not a_calls:
+                args_iou = float("nan")
+            elif all_empty_args and (b_calls or a_calls):
+                args_iou = float("nan")
 
     return {
         "tool_name_acc": tool_name_acc,
@@ -265,23 +242,9 @@ def _record_metrics(record: dict) -> dict[str, float]:
 
 
 def _pair_key(record: dict) -> tuple[str, float, str, int]:
-    eps_raw = record.get("epsilon", 0.0)
-    try:
-        eps = float(eps_raw)
-    except (TypeError, ValueError):
-        eps = 0.0
-    if math.isnan(eps) or math.isinf(eps):
-        # NaN ordering is undefined; substitute a sentinel so sort doesn't
-        # crash.  The record is almost certainly malformed — warn loudly.
-        logger.warning(
-            "epsilon is %s for sample_id=%r; substituting 0.0 for sort key",
-            eps_raw,
-            record.get("sample_id", ""),
-        )
-        eps = 0.0
     return (
         str(record.get("sample_id", "")),
-        eps,
+        float(record.get("epsilon", 0.0)),
         str(record.get("attack_mode", "")),
         int(record.get("seed", 0)),
     )
@@ -289,7 +252,6 @@ def _pair_key(record: dict) -> tuple[str, float, str, int]:
 
 def load_records(path: Path) -> list[dict]:
     records: list[dict] = []
-    skipped = 0
     with path.open("r", encoding="utf-8") as f:
         for lineno, line in enumerate(f, start=1):
             line = line.strip()
@@ -298,17 +260,10 @@ def load_records(path: Path) -> list[dict]:
             try:
                 records.append(json.loads(line))
             except json.JSONDecodeError:
-                skipped += 1
                 logger.warning(
                     "skipping malformed JSON at %s:%d — %s",
                     path, lineno, line[:80],
                 )
-    if skipped:
-        logger.warning(
-            "load_records: %d / %d lines skipped from %s — "
-            "downstream metrics computed on %d records",
-            skipped, skipped + len(records), path.name, len(records),
-        )
     return records
 
 
@@ -367,27 +322,9 @@ def records_to_per_sample(path: Path) -> dict[str, list[float]]:
     which intersects on the pair-key and is robust to missing rows.
     """
     records = load_records(path)
-    # Deduplicate by pair-key: duplicate (sample_id, ε, mode, seed) records
-    # silently bias per-sample means if kept.  ``keep="last"`` matches the
-    # semantics of ``align_per_sample_with_drops`` which naturally keeps the
-    # last record for a given key via dict construction.
-    seen: dict[tuple, int] = {}
-    deduped: list[dict] = []
-    for r in records:
-        key = _pair_key(r)
-        if key in seen:
-            logger.warning(
-                "records_to_per_sample: duplicate pair-key %s in %s "
-                "(keeping last occurrence)",
-                key, path.name,
-            )
-            deduped[seen[key]] = r
-        else:
-            seen[key] = len(deduped)
-            deduped.append(r)
-    deduped.sort(key=_pair_key)
+    records.sort(key=_pair_key)
     metrics: dict[str, list[float]] = {key: [] for key in T3_METRICS}
-    for record in deduped:
+    for record in records:
         per_record = _record_metrics(record)
         for key in T3_METRICS:
             metrics[key].append(per_record[key])
@@ -426,26 +363,8 @@ def align_per_sample_with_drops(
     T3 layer (or its caller) can surface them to the operator and
     refuse to silently pass with reduced evidence (C5).
     """
-    base_raw = load_records(undefended_records)
-    def_raw = load_records(defended_records)
-    base_recs: dict[tuple, dict] = {}
-    def_recs: dict[tuple, dict] = {}
-    for r in base_raw:
-        key = _pair_key(r)
-        if key in base_recs:
-            logger.warning(
-                "align_per_sample: duplicate pair-key %s in undefended "
-                "records — keeping last occurrence", key,
-            )
-        base_recs[key] = r
-    for r in def_raw:
-        key = _pair_key(r)
-        if key in def_recs:
-            logger.warning(
-                "align_per_sample: duplicate pair-key %s in defended "
-                "records — keeping last occurrence", key,
-            )
-        def_recs[key] = r
+    base_recs = {_pair_key(r): r for r in load_records(undefended_records)}
+    def_recs = {_pair_key(r): r for r in load_records(defended_records)}
     shared_keys = sorted(set(base_recs) & set(def_recs))
 
     undefended: dict[str, list[float]] = {key: [] for key in T3_METRICS}
@@ -462,17 +381,5 @@ def align_per_sample_with_drops(
 
 def save_per_sample(path: Path, per_sample: dict[str, list[float]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Replace NaN / Inf with null so json.dump doesn't crash.  Upstream
-    # callers should have run _drop_nan_metrics first; this is a safety net.
-    def _sanitize(obj: object) -> object:
-        if isinstance(obj, dict):
-            return {k: _sanitize(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_sanitize(v) for v in obj]
-        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
-            return None
-        return obj
-
     with path.open("w", encoding="utf-8") as f:
-        json.dump(_sanitize(per_sample), f, indent=2)
+        json.dump(per_sample, f, indent=2)

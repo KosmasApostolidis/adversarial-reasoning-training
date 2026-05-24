@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import torch
 
 from ..utils.paths import normalize_run_dir
 from ..utils.seed import seed_everything
-
-_log = logging.getLogger(__name__)
 
 
 def setup_seed(
@@ -27,11 +24,6 @@ def setup_device(name: str = "cuda") -> torch.device:
     ``torch.cuda.is_available()`` themselves; this helper never raises.
     """
     if name.startswith("cuda") and not torch.cuda.is_available():
-        _log.warning(
-            "CUDA requested but torch.cuda.is_available() is False — "
-            "falling back to CPU. Training will be orders of magnitude "
-            "slower. Set CUDA_VISIBLE_DEVICES or check driver install."
-        )
         return torch.device("cpu")
     return torch.device(name)
 

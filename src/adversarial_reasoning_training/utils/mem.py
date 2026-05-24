@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 
 import torch
-
-_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -31,11 +28,6 @@ class MemoryStats:
 def current_memory_stats(device: int | str | None = None) -> MemoryStats:
     """Return current + peak memory for the selected CUDA device."""
     if not torch.cuda.is_available():
-        _log.warning(
-            "current_memory_stats called but CUDA unavailable — "
-            "returning zero stats with device='cpu'. GPU memory "
-            "accounting in train_meta.json will be 0.0 GiB."
-        )
         return MemoryStats(0.0, 0.0, 0.0, 0.0, "cpu")
     dev = torch.device(f"cuda:{device}") if isinstance(device, int) else (
         torch.device(device) if device else torch.device("cuda")

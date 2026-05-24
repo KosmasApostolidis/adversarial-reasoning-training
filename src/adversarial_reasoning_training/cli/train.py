@@ -159,15 +159,12 @@ def _build_trainer_config(
         eps_schedule=pgd_cfg.get("eps_schedule"),
         default_epsilon=pgd_cfg.get("default_eps", EPS_4_255),
         alpha_ratio=pgd_cfg.get("alpha_ratio", DEFAULT_PGD_ALPHA_RATIO),
-        pgd_steps=pgd_cfg.get("steps", 20),
+        pgd_steps=pgd_cfg.get("steps", 7),
         pgd_random_restarts=int(pgd_cfg.get("random_restarts", 1)),
-        pgd_attack_mode=pgd_cfg.get("attack_mode", "pgd"),
-        pgd_momentum=float(pgd_cfg.get("momentum", 0.75)),
-        pgd_rho=float(pgd_cfg.get("rho", 0.75)),
         loader_seed=_resolve_seed(args, train_cfg),
         run_dir=args.run_dir,
         final_save_include_optimizer=train_cfg.get(
-            "final_save_include_optimizer", False
+            "final_save_include_optimizer", True
         ),
     )
 

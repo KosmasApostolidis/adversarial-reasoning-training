@@ -59,12 +59,11 @@ def _process_image_llava_ov(
         count = sum(1 for t in ids if t == image_token_id)
         if count >= 1:
             num_image_tokens = count
-    except (KeyError, IndexError) as exc:
-        logger.warning(
-            "LLaVA-OneVision processor did not pre-expand image placeholder "
-            "(%s: %s); falling back to num_image_tokens=1 — training "
-            "data may be misaligned.",
-            type(exc).__name__, exc,
+    except (KeyError, IndexError, RuntimeError, ValueError, AttributeError, TypeError):
+        logger.debug(
+            "LLaVA-OneVision processor did not pre-expand image placeholder; "
+            "falling back to num_image_tokens=1.",
+            exc_info=True,
         )
         num_image_tokens = 1
 

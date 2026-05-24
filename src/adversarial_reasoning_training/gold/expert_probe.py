@@ -39,23 +39,13 @@ def load_expert_probe(path: str | Path) -> list[tuple[str, Trajectory]]:
     if not p.exists():
         logger.warning("expert probe file not found at %s — returning empty list", p)
         return []
-    import logging
-
-    _log = logging.getLogger(__name__)
     out: list[tuple[str, Trajectory]] = []
     with p.open("r", encoding="utf-8") as f:
-        for lineno, line in enumerate(f, start=1):
+        for line in f:
             line = line.strip()
             if not line:
                 continue
-            try:
-                d = json.loads(line)
-            except json.JSONDecodeError:
-                _log.warning(
-                    "Skipping malformed JSON in expert probe %s:%d — %s",
-                    p, lineno, line[:80],
-                )
-                continue
+            d = json.loads(line)
             sid = d.get("sample_id") or d.get("metadata", {}).get("sample_id") or "?"
             out.append((sid, _trajectory_from_dict(d)))
     return out

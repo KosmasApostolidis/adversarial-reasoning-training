@@ -6,15 +6,12 @@
 oracle_version: v1
 cache_dir: data/gold
 
-# NOTE: expert_probe path and threshold are consumed by T1 CLI flags
-# (--expert-probe, --expert-probe-min-acc), NOT read from this file.
-# These keys are documentation-only; changing them here has no effect.
+# NOTE: expert_probe paths and thresholds are configured at the gate level
+# (T1 CLI flags), not read from this file. The template list below is also
+# advisory — all five templates are always enabled in code.
 expert_probe: data/gold/expert_probe.jsonl
 expert_probe_min_acc: 0.85
 
-# NOTE: ``templates.enabled`` is documentation-only.  All five templates
-# are always active in code (gold/templates.py).  Removing an entry here
-# does not disable the template.
 templates:
   enabled:
     - pirads_1_2

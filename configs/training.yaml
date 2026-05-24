@@ -23,9 +23,6 @@ betas: [0.9, 0.999]
 schedule: cosine            # cosine | linear | constant
 warmup_pct: 0.03
 
-# NOTE: grad_ckpt is validated by the schema but NOT currently applied by
-# cli/train.py or any gate.  To enable gradient checkpointing, add
-# ``model.gradient_checkpointing_enable()`` after model loading.
 grad_ckpt: true
 amp: bf16                   # bf16 | fp16 | fp32
 grad_clip_norm: 1.0
