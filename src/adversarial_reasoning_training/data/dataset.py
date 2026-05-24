@@ -78,7 +78,14 @@ class ProstateXTrainDS(Dataset):
         else:
             traj = generate_trajectory(s.task_id, s.sample_id, md)
             if self.write_back:
-                save_gold(self.cache_dir, key, traj)
+                try:
+                    save_gold(self.cache_dir, key, traj)
+                except OSError:
+                    logger.warning(
+                        "Failed to write gold cache for %s — continuing "
+                        "without cache (disk full or permission error?)",
+                        key,
+                    )
         return TrainSample(
             task_id=s.task_id,
             sample_id=s.sample_id,

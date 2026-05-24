@@ -39,6 +39,9 @@ def pack_teacher_forced_batch(
     """
     input_ids = torch.tensor([ids], dtype=torch.long)
     segment_ids = torch.tensor([seg], dtype=torch.long)
+    # B=1 invariant: no padding exists, so attention_mask is always all-ones.
+    # If B>1 batching is ever supported, this must be derived from actual
+    # padding positions (TFCollator already raises NotImplementedError for B>1).
     attention_mask = torch.ones_like(input_ids)
     task_mask, traj_mask = build_masks(segment_ids, weights)
     labels = labels_from_input_ids(input_ids, task_mask)

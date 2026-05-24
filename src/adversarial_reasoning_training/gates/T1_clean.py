@@ -84,6 +84,11 @@ def _run_t1_training_loop(
     grad_accum: int,
 ) -> tuple[int, float]:
     """Train until ``max_steps`` optimizer steps. Return (steps_taken, final_loss)."""
+    if len(loader) == 0:
+        raise ValueError(
+            "Training DataLoader is empty — dataset has 0 samples. "
+            "Check data.yaml n_train or the train split."
+        )
     step = 0
     micro = 0
     loss_final = float("nan")
@@ -305,6 +310,7 @@ def _build_t1_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grad-accum", type=int, default=GRAD_ACCUM_DEFAULT)
     parser.add_argument("--tool-name-acc-min", type=float, default=defaults.tool_name_acc_min)
     parser.add_argument("--answer-em-min", type=float, default=defaults.answer_em_min)
+    parser.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -435,7 +441,10 @@ def _main() -> int:
         --max-steps 200
         --out runs/t1/gates/T1.json``
     """
+    from ..utils.seed import seed_everything
+
     args = _build_t1_parser().parse_args()
+    seed_everything(args.seed)
     cfgs = _load_t1_configs(args.data, args.gold, args.full_ft, args.training)
     vlm, model = _load_t1_model(args.model, args.models_yaml, cfgs["full_ft"])
     train_ds, dev_ds = _build_t1_datasets(cfgs["data"], cfgs["gold"])

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 
 import numpy as np
 import torch
+
+_log = logging.getLogger(__name__)
 
 
 def seed_everything(
@@ -31,6 +34,10 @@ def seed_everything(
         claims in T1/T3 reports). Set ``True`` for smoke runs that
         accept best-effort determinism.
     """
+    # PYTHONHASHSEED is read by CPython at interpreter startup; setting it
+    # in-process has no effect on the current interpreter.  It is set here
+    # as a hint for child processes launched via subprocess, which inherit
+    # the env var and will use it at their own startup.
     os.environ["PYTHONHASHSEED"] = str(seed)
     # cuBLAS needs an explicit workspace-config hint to keep matmul
     # outputs deterministic across kernel selection. Without it,
@@ -49,7 +56,11 @@ def seed_everything(
     try:
         from transformers import set_seed as hf_set_seed  # type: ignore
     except ImportError:
-        pass
+        _log.warning(
+            "transformers.set_seed not available — HuggingFace RNG layer "
+            "will NOT be seeded. .generate() outputs may be non-deterministic "
+            "even with deterministic=True."
+        )
     else:
         hf_set_seed(seed)
 
@@ -59,4 +70,8 @@ def seed_everything(
         try:
             torch.use_deterministic_algorithms(True, warn_only=warn_only)
         except (AttributeError, RuntimeError):
-            pass
+            _log.warning(
+                "torch.use_deterministic_algorithms(True) failed — "
+                "falling back to non-deterministic mode.  Seed-replication "
+                "guarantees are void for this run."
+            )

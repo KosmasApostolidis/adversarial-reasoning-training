@@ -127,7 +127,14 @@ def get_processor(vlm: Any) -> Any:
     """
     if vlm.family == VLMFamily.INTERNVL2:
         return vlm
-    return getattr(vlm, "processor", None) or vlm.tokenizer
+    processor = getattr(vlm, "processor", None) or vlm.tokenizer
+    if processor is None:
+        raise AttributeError(
+            f"VLM '{type(vlm).__name__}' exposes neither 'processor' "
+            f"nor 'tokenizer' attribute. Check the VLM wrapper implements "
+            f"at least one of these."
+        )
+    return processor
 
 
 def get_collator(vlm: Any) -> TFCollator:

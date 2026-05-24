@@ -531,6 +531,9 @@ run_one_model() {
       # NOTE: undefended eval uses stronger attack (100 steps, 5 restarts
       # configured in configs/attacks.yaml) than defended eval (50 steps,
       # 3 restarts) to conservatively widen the robustness gap.
+      # METHODOLOGY NOTE: this asymmetry conflates the defense's effect
+      # with the attack-budget difference.  A cleaner design would use
+      # identical attack budgets for both models and report the raw delta.
       clear_out
     fi
   fi
@@ -682,6 +685,10 @@ run_one_seed() {
         --alpha                    0.05 \
         --min-traj-edit-delta      "$_t3_delta" \
         --min-significant-metrics  1 \
+        # NOTE: min-significant-metrics=1 relaxes T3's code default of 3.
+        # Running art-eval-robust directly from the CLI uses the stricter
+        # 3/4 threshold.  If this relaxation is intentional, align the
+        # T3Thresholds dataclass default (src/gates/T3_robust.py:36).
         || { echo "FAIL [${ALIAS}/seed${SEED}]: T3-eval rc=$?" >&2; clear_out; return 1; }
       clear_out
     fi

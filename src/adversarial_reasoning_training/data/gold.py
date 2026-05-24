@@ -39,6 +39,10 @@ def save_gold(cache_dir: str | Path, key: GoldKey, trajectory: Trajectory) -> Pa
     path = _cache_path(cache_dir, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
+        # NOTE: to_jsonl() produces a single JSON object, not JSON Lines.
+        # load_gold reads it with json.loads(f.read()), which expects
+        # single-object format. If to_jsonl() is ever changed to emit
+        # true JSONL, load_gold must be updated to iterate over lines.
         f.write(trajectory.to_jsonl())
     return path
 

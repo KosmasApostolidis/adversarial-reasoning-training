@@ -1,0 +1,6 @@
+# InternVL3-8B training override.
+# Extends base training.yaml; picked up automatically by run_pipeline.sh for internvl3.
+# Currently matches the base — kept as a hook for model-specific tuning.
+_extends: training.yaml
+
+defense: oaat
