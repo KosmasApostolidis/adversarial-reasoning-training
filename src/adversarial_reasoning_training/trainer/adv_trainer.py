@@ -50,8 +50,11 @@ class TrainerConfig:
     eps_schedule: list[dict[str, Any]] | None = None
     default_epsilon: float = EPS_4_255
     alpha_ratio: float = DEFAULT_PGD_ALPHA_RATIO
-    pgd_steps: int = 7
+    pgd_steps: int = 20  # match canonical configs/defenses.yaml
     pgd_random_restarts: int = 1
+    pgd_attack_mode: str = "pgd"  # pgd | apgd
+    pgd_momentum: float = 0.75
+    pgd_rho: float = 0.75
     # Seed for the train DataLoader RNG (controls shuffle order). Threaded
     # from ``--seed`` so a re-run with the same seed observes identical
     # mini-batch ordering. Without this, even a fully seeded torch / numpy
@@ -59,7 +62,7 @@ class TrainerConfig:
     # falls back to a fresh entropy source.
     loader_seed: int = 0
     run_dir: Path = Path("runs/default")
-    final_save_include_optimizer: bool = True
+    final_save_include_optimizer: bool = False  # match canonical training.yaml: weights-only save
 
 
 class AdvTrainer:
@@ -112,7 +115,7 @@ class AdvTrainer:
         )
         # Surface malformed eps_schedule entries before any training starts —
         # a typo would otherwise crash mid-epoch and lose progress.
-        validate_eps_schedule(self.config.eps_schedule)
+        validate_eps_schedule(self.config.eps_schedule, n_epochs=self.config.epochs)
 
         # Per-fit mutable state. ``accum_count`` tracks valid (non-NaN)
         # micro-batches in the current grad-accum window; partial tails
@@ -171,8 +174,13 @@ class AdvTrainer:
             alpha_ratio=self.config.alpha_ratio,
             steps=self.config.pgd_steps,
             random_restarts=self.config.pgd_random_restarts,
+            attack_mode=self.config.pgd_attack_mode,
+            momentum=self.config.pgd_momentum,
+            rho=self.config.pgd_rho,
         )
-        pixel_values = batch.forward_kwargs["pixel_values"].to(self.device)
+        pixel_values = batch.forward_kwargs["pixel_values"].to(
+            self.device, dtype=next(self.model.parameters()).dtype
+        )
 
         # Switch to eval mode for the PGD craft so dropout / BN do not perturb
         # the deterministic forward the attacker needs, then restore the prior
@@ -430,8 +438,7 @@ class AdvTrainer:
         self.optimizer.zero_grad(set_to_none=True)
         self._accum_loss_acc = 0.0
         self._accum_count = 0
-        if getattr(self, "use_amp", False) and getattr(self, "amp_dtype", "") == "fp16":
-            self.scaler.update()
+        self.scaler.update()
 
     def _drain_partial_window(
         self,
@@ -553,7 +560,13 @@ class AdvTrainer:
             "device": final_mem.device,
         }
         meta_path = self.config.run_dir / "train_meta.json"
-        meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+        try:
+            meta_path.write_text(json.dumps(meta, indent=2) + "\n")
+        except OSError:
+            logger.warning(
+                "Failed to write train_meta.json to %s — disk full?",
+                meta_path,
+            )
 
     def fit(self, dataset: Dataset) -> None:
         loader_gen = torch.Generator()

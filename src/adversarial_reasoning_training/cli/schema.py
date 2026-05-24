@@ -37,7 +37,7 @@ TRAINING_REQUIRED_KEYS = frozenset(
 TRAINING_LR_REQUIRED_KEYS = frozenset({"lm", "projector", "vit"})
 
 DEFENSES_PGD_REQUIRED_KEYS = frozenset(
-    {"eps_schedule", "default_eps", "alpha_ratio", "steps", "eval_eps", "eval_steps"}
+    {"eps_schedule", "default_eps", "alpha_ratio", "steps"}
 )
 
 DATA_REQUIRED_KEYS = frozenset(

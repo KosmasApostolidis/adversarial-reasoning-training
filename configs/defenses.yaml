@@ -15,7 +15,7 @@ pgd:
   default_eps: 0.0157                       # 4/255 fallback
   alpha_ratio: 0.25                         # alpha = eps * ratio
   steps: 20
-  refresh_K: 1                              # re-craft adv every K outer steps
+  refresh_K: 1                              # re-craft adv every K outer steps (NOT YET WIRED — always 1)
   eval_eps: [0.0157, 0.0314]                # 4/255, 8/255 for T3
   eval_steps: 40
 

@@ -50,9 +50,11 @@ def main(argv: list[str] | None = None) -> int:
 
     print("verifying weights-only payload reloads with same tensor count")
     reloaded = torch.load(args.dst, map_location="cpu", weights_only=True)
-    assert len(reloaded["model_state_dict"]) == n_tensors, (
-        f"tensor count mismatch: {len(reloaded['model_state_dict'])} vs {n_tensors}"
-    )
+    n_reloaded = len(reloaded["model_state_dict"])
+    if n_reloaded != n_tensors:
+        raise RuntimeError(
+            f"tensor count mismatch: {n_reloaded} reloaded vs {n_tensors} saved"
+        )
     print(f"verify OK — {n_tensors} tensors round-tripped")
     return 0
 
