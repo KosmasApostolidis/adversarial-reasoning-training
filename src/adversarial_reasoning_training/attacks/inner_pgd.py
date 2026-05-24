@@ -73,10 +73,26 @@ def run_inner_pgd(
     forward composes its own normalization, so grads propagate back to
     the pixel domain (attacks-repo design note).
     """
-    prompt_tokens, target_tokens, _ = _split_prompt_target(batch)
+    prompt_tokens, target_tokens, target_mask = _split_prompt_target(batch)
+
+    # ── ε rescaling ──────────────────────────────────────────────────
+    # The config epsilon is in pixel domain [0, 1] (e.g. 4/255 ≈ 0.0157).
+    # Pixel values have been through Normalize(mean, std) so the actual
+    # L∞ ball radius in normalised space must be ε / pixel_std, otherwise
+    # the perturbation is ~4.4× weaker than intended.  The attacks-repo
+    # runner applies this same rescaling (runner/attacks.py:236-239).
+    # Pre-fix every adv-FT run trained with an under-strength adversary.
+    pixel_std = float(getattr(vlm, "pixel_std", 1.0))
+    if pixel_std <= 0.0:
+        raise ValueError(
+            f"vlm.pixel_std must be > 0 (got {pixel_std}); cannot rescale ε."
+        )
+    norm_epsilon = config.epsilon / pixel_std
+    # ──────────────────────────────────────────────────────────────────
+
     if config.attack_mode == "apgd":
         attack = APGDAttack(
-            epsilon=config.epsilon,
+            epsilon=norm_epsilon,
             steps=config.steps,
             random_restarts=config.random_restarts,
             momentum=config.momentum,
@@ -86,8 +102,8 @@ def run_inner_pgd(
     else:
         attack = PGDAttack(
             name="pgd_linf_inner",
-            epsilon=config.epsilon,
-            alpha=config.epsilon * config.alpha_ratio,
+            epsilon=norm_epsilon,
+            alpha=norm_epsilon * config.alpha_ratio,
             steps=config.steps,
             random_restarts=config.random_restarts,
             targeted=False,
@@ -100,6 +116,10 @@ def run_inner_pgd(
         for k, v in batch.forward_kwargs.items()
         if k != "pixel_values" and v is not None
     }
+    # Pass target_mask so TokenTargetLoss can weight CE by task-relevant
+    # positions only (fixes HIGH-1: padding/observation tokens dilute
+    # the adversarial gradient on tool-call positions).
+    fwd_kwargs["__target_mask"] = target_mask
     result = attack.run(
         vlm=vlm,
         image=image_tensor,
@@ -119,13 +139,13 @@ def run_inner_pgd(
     return result
 
 
-def validate_eps_schedule(schedule: list[dict[str, Any]] | None) -> None:
+def validate_eps_schedule(
+    schedule: list[dict[str, Any]] | None, *, n_epochs: int | None = None
+) -> None:
     """Fail-fast on a malformed ε schedule before training starts.
 
     Each entry must declare ``epoch_range: [lo, hi]`` and ``eps: <float>``.
-    A typo (``epoch_ranges``) or missing key would otherwise crash mid-epoch
-    inside ``epsilon_for_epoch`` and waste H200-hours of training progress.
-    Call this once at trainer startup with the schedule from defenses.yaml.
+    If ``n_epochs`` is supplied, a coverage gap check emits a warning.
     """
     if not schedule:
         return
@@ -147,16 +167,26 @@ def validate_eps_schedule(schedule: list[dict[str, Any]] | None) -> None:
                 f"eps_schedule[{i}].epoch_range must be a 2-element list, "
                 f"got {epoch_range!r}."
             )
-        # Reject non-numeric eps at startup. Pre-fix a quoted ``eps: "0.01"``
-        # slipped past validation and crashed mid-attack inside
-        # ``PGDAttack`` when ``alpha = eps * alpha_ratio`` was attempted.
-        # ``bool`` is an ``int`` subclass — explicitly excluded so
-        # ``eps: true`` (yaml.safe_load → ``True``) cannot coerce to 1.0 ε.
         eps_val = entry["eps"]
         if isinstance(eps_val, bool) or not isinstance(eps_val, (int, float)):
             raise ValueError(
                 f"eps_schedule[{i}].eps must be numeric, got "
                 f"{type(eps_val).__name__}: {eps_val!r}"
+            )
+    if n_epochs is not None:
+        covered: set[int] = set()
+        for entry in schedule:
+            lo, hi = entry["epoch_range"]
+            covered.update(range(int(lo), int(hi) + 1))
+        expected = set(range(1, n_epochs + 1))
+        if missing := expected - covered:
+            import logging
+
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "ε schedule has gaps at epochs %s — epsilon_for_epoch "
+                "will fall back to default_eps for these epochs",
+                sorted(missing),
             )
 
 
@@ -178,4 +208,14 @@ def epsilon_for_epoch(
         lo, hi = epoch_range
         if lo <= epoch <= hi:
             return float(eps)
+    import logging
+
+    _log = logging.getLogger(__name__)
+    _log.warning(
+        "ε schedule has no entry covering epoch %d; falling back to "
+        "default_eps=%.4f (4/255≈0.0157). If eps_schedule is intentionally "
+        "absent, set it to [] to silence this warning.",
+        epoch,
+        default_eps,
+    )
     return default_eps

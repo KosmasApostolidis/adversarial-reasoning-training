@@ -193,6 +193,10 @@ def _tokenize_internvl_segments(
     num_image_tokens: int,
 ) -> tuple[list[int], list[int]]:
     """Tokenize segments; substitute the image sentinel with N IMG_CONTEXT ids."""
+    # NOTE: add_special_tokens=False means BOS is NOT prepended.  InternLM2
+    # chat models use ``<|im_start|>`` as the sequence delimiter, which
+    # subsumes the BOS role.  If the tokenizer's chat template changes,
+    # verify that BOS handling here matches what ``generate()`` produces.
     all_ids: list[int] = []
     all_seg: list[int] = []
     for seg in segments:
