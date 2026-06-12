@@ -187,6 +187,39 @@ def test_internvl3_tool_sequence_fallback_match(tmp_path: Path) -> None:
     assert defended["tool_name_acc"] == [1.0]
 
 
+def test_internvl3_fallback_real_args_keep_perfect_iou(tmp_path: Path) -> None:
+    """Regression: when the InternVL3 text fallback recovers REAL args via
+    raw_decode and both sides match, ``args_iou`` is a genuine 1.0 and must
+    NOT be NaN'd by the fake-perfection guard. NaN-ing it empties the whole
+    args_iou metric (via _drop_nan_metrics), silently wiping the evidence."""
+    text = '{"!tool": "query!guidelines", "args!": {"x": 1}}'
+    u_path = tmp_path / "u.jsonl"
+    d_path = tmp_path / "d.jsonl"
+    _write_jsonl(u_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=text, attacked_text=text)])
+    _write_jsonl(d_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=text, attacked_text=text)])
+    undefended, defended, _ = align_per_sample(u_path, d_path)
+    assert undefended["args_iou"] == [1.0], (
+        "real recovered args matching on both sides must yield args_iou=1.0, "
+        f"not be NaN-dropped to {undefended['args_iou']!r}"
+    )
+    assert defended["args_iou"] == [1.0]
+
+
+def test_internvl3_fallback_name_only_nans_iou(tmp_path: Path) -> None:
+    """Counterpart: when the fallback recovers tool NAMES but no args (empty
+    args on every recovered call), the 1.0 is fake and must be NaN'd —
+    preserving the discriminating behavior the guard is meant to provide."""
+    text = '{"!tool": "escalate_to_specialist", "args!": {}}'
+    u_path = tmp_path / "u.jsonl"
+    d_path = tmp_path / "d.jsonl"
+    _write_jsonl(u_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=text, attacked_text=text)])
+    _write_jsonl(d_path, [_record_internvl3(sample_id="s1", epsilon=0.01, benign_text=text, attacked_text=text)])
+    undefended, defended, _ = align_per_sample(u_path, d_path)
+    # empty recovered args → fake-perfect args_iou → metric dropped to []
+    assert undefended["args_iou"] == []
+    assert defended["args_iou"] == []
+
+
 def test_internvl3_tool_sequence_fallback_mismatch(tmp_path: Path) -> None:
     """Attack breaks output → benign has tools, attacked is empty → acc = 0.0."""
     benign_text = '{"!tool": "escalate_to_specialist", "args!": {}}'

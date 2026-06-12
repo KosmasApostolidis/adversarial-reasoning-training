@@ -103,7 +103,12 @@ def _wilcoxon_signed_rank(
             "returning (nan, 1.0). Install scipy to recover BH-FDR statistics."
         )
         return float("nan"), 1.0
-    diffs = [d - b for b, d in zip(undefended, defended, strict=False)]
+    if len(undefended) != len(defended):
+        raise ValueError(
+            f"undefended({len(undefended)}) and defended({len(defended)}) "
+            f"must have equal length for Wilcoxon signed-rank test"
+        )
+    diffs = [d - b for b, d in zip(undefended, defended, strict=True)]
     nonzero = [d for d in diffs if d != 0.0]
     if not nonzero:
         logger.info(
@@ -230,10 +235,17 @@ def _compute_t3_verdict(
     passed = True
     traj_metric = per_metric.get("traj_edit_distance", {})
     traj_delta = float(traj_metric.get("delta_mean", float("nan")))
-    if math.isnan(traj_delta) or traj_delta < -thresholds.min_traj_edit_delta:
+    if math.isnan(traj_delta):
         passed = False
         notes.append(
-            f"traj_edit_distance delta {traj_delta:.3f} < -{thresholds.min_traj_edit_delta}"
+            "traj_edit_distance: metric unavailable or all values NaN — "
+            "cannot compare against threshold"
+        )
+    elif traj_delta < -thresholds.min_traj_edit_delta:
+        passed = False
+        notes.append(
+            f"traj_edit_distance delta {traj_delta:.3f} < "
+            f"-{thresholds.min_traj_edit_delta}"
         )
     if len(significant) < thresholds.min_significant_metrics:
         passed = False

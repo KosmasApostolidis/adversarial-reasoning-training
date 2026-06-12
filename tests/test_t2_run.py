@@ -8,6 +8,7 @@ documented in docs/EXPERIMENT_RUNS.md instead.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from adversarial_reasoning_training.gates.T2_no_collapse import (
@@ -117,3 +118,26 @@ def test_run_t2_evaluator_returning_none_treated_as_zero(tmp_path: Path) -> None
     )
     # Empty current → zero — guaranteed to fail at any nonzero ceiling.
     assert result.passed is False
+
+
+def test_run_t2_missing_metric_fails_even_below_tolerance(tmp_path: Path) -> None:
+    """Regression: a metric missing from the evaluator output must FAIL the
+    gate even when the T1 ceiling is below the tolerance. Pre-fix the missing
+    value was treated as 0.0, so ``drop = ceil - 0.0`` could be <= tol and the
+    gate silently PASSED on an evaluator crash. The NaN-substitution fix must
+    fail here; a large-ceiling test cannot distinguish the two behaviours."""
+    t1 = tmp_path / "T1.json"
+    _write_t1(t1, {"tool_name_acc": 0.02})  # below default tol (3pp = 0.03)
+
+    result = run_t2(
+        adv_clean_evaluator=lambda: {},  # metric absent → NaN drop
+        t1_result_path=t1,
+        out_path=tmp_path / "T2.json",
+        thresholds=T2Thresholds(metrics=("tool_name_acc",)),
+    )
+    assert result.passed is False, (
+        "missing metric must fail the gate regardless of ceiling magnitude; "
+        "treating it as 0.0 would let a sub-tolerance ceiling pass silently"
+    )
+    pm = result.per_metric["tool_name_acc"]
+    assert math.isnan(pm["current"]) and math.isnan(pm["drop"])
