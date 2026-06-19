@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -37,6 +38,8 @@ from ._common import (
     load_gate_yaml,
     write_gate_result,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -340,8 +343,11 @@ def _main() -> int:
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
     from ..utils.seed import seed_everything
 
+    from ..utils.seed import seed_everything
+
     parser = _build_t0_parser()
     args = parser.parse_args()
+    seed_everything(args.seed)
 
     seed_everything(args.seed)
 

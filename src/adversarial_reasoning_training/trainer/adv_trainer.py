@@ -14,6 +14,7 @@ Periodic checkpoint + optional dev evaluation between epochs.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from collections.abc import Callable
@@ -36,6 +37,8 @@ from ..trajectory.teacher_force import TeacherForcedBatch
 from ..utils.constants import DEFAULT_PGD_ALPHA_RATIO, EPS_4_255
 from ..utils.mem import current_memory_stats, reset_peak_memory
 from .ckpt import CheckpointRegistry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -70,13 +73,13 @@ class AdvTrainer:
 
     Parameters
     ----------
-    vlm : attacks-repo VLMBase-compatible object with `forward_with_logits`.
-    model : the underlying `torch.nn.Module` whose params we optimise.
-    collator : TFCollator producing TeacherForcedBatch.
-    loss_fn : closure from `losses.selector.build_loss`.
+    vlm         : attacks-repo VLMBase-compatible object with `forward_with_logits`.
+    model       : the underlying `torch.nn.Module` whose params we optimise.
+    collator    : TFCollator producing TeacherForcedBatch.
+    loss_fn     : closure from `losses.selector.build_loss`.
     optimizer, scheduler : torch optim + LR scheduler.
-    config : TrainerConfig.
-    device : torch device.
+    config      : TrainerConfig.
+    device      : torch device.
     evaluator : optional callable (global_step, epoch) -> metrics dict.
         Called on `eval_every` cadence + at training end.
     metric_for_best : key in evaluator output used to pick best ckpt.
@@ -438,6 +441,12 @@ class AdvTrainer:
         self.optimizer.zero_grad(set_to_none=True)
         self._accum_loss_acc = 0.0
         self._accum_count = 0
+        # Mirror ``_handle_inf_grad``: advance the AMP scaler on the skip so
+        # the fp16 loss-scale halves after a NaN event instead of stalling.
+        # No-op under bf16/fp32 (scaler disabled). The pre-fix guard keyed on
+        # ``self.use_amp`` / ``self.amp_dtype`` — attributes that never exist
+        # on the trainer — so this branch was dead and the scaler never
+        # updated on a NaN-loss skip.
         self.scaler.update()
 
     def _drain_partial_window(

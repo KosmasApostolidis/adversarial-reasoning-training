@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -58,8 +59,9 @@ def _read_metrics(path: Path, metric_keys: tuple[str, ...]) -> dict[str, float]:
     flat: dict[str, float] = {}
     metrics_sub = payload.get("metrics", {})
     for key in metric_keys:
-        # Prefer the `metrics` sub-dict when present to avoid shadowing
-        # by same-named top-level keys.
+        # Prefer the ``metrics`` sub-dict when present so a same-named
+        # top-level key (e.g. a threshold echo) cannot shadow the real
+        # metric value.
         if isinstance(metrics_sub, dict) and key in metrics_sub:
             flat[key] = float(metrics_sub[key])
         elif key in payload:
@@ -94,16 +96,14 @@ def run_t2(
         if key not in current:
             notes.append(
                 f"metric {key} missing from evaluator output; "
-                f"treating as NaN (ceiling={ceil:.3f}) "
-                f"— this likely means the evaluator crashed or returned "
-                f"an incomplete result"
+                f"treating as NaN (ceiling={ceil:.3f}) — this likely means "
+                f"the evaluator crashed or returned an incomplete result"
             )
             current_value = float("nan")
         else:
             current_value = float(current[key])
-        import math
-
         drop = ceil - current_value
+        # A NaN drop (missing metric) must fail the gate, not silently pass.
         ok = (not math.isnan(drop)) and drop <= tol
         per_metric[key] = {
             "ceiling": ceil,

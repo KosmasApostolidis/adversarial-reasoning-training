@@ -233,6 +233,8 @@ def test_loss_axis_actually_changes_defense() -> None:
         cfg = load_yaml(ABLATIONS / name)
         if name == "loss_pgd_at.yaml" and base == "pgd_at":
             continue  # undefended changed to pgd_at — this ablation now matches default
+        if name == "loss_oaat.yaml" and base == "oaat":
+            continue  # undefended changed to oaat — this ablation now matches default
         assert cfg["defense"] != base, (
             f"{name}: defense unchanged from undefended ({base}); "
             "the ablation toggles nothing"

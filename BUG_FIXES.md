@@ -130,3 +130,38 @@ Main retains the in-process `PYTHONHASHSEED` assignment because DataLoader worke
 ## End state
 
 Branch: `refactor/clean-code-bounded-funcs`, ahead of `origin/refactor/clean-code-bounded-funcs` by 13 commits (2 prior + 11 fix commits). Files still uncommitted at end of Phase 3: the same 24 dirty files present at start of session (configs, docs, scripts unrelated to any approved finding).
+
+---
+
+## Session 2026-06-12 — review of the unreviewed working-tree diff
+
+The prior session left ~400 lines of uncommitted fixes (ε-rescaling, robust_eval
+dedup/parsing, T2 NaN handling). Re-audited those *un-committed* hunks (not yet
+reviewed by anyone) plus the attacks-repo integration. One real regression found
+and fixed; the rest confirmed correct.
+
+### B12 — `args_iou` fake-perfection guard over-NaNs genuine matches (FIXED)
+
+- **File:** `src/adversarial_reasoning_training/eval/robust_eval.py:242-270` (`_record_metrics`)
+- **Class:** correctness / silent-evidence-loss · **SEV:** HIGH · **CONF:** HIGH
+- **Introduced by:** the uncommitted working-tree change that swapped `_parse_tool_calls_from_text` to `json.JSONDecoder.raw_decode` (which *can* recover real args) but simultaneously deleted the prior `all_empty_args` discriminator from the fake-perfection guard.
+- **Bug:** for InternVL3 text-fallback records, the guard NaN'd **every** `args_iou == 1.0`, even when `raw_decode` recovered real matching args (e.g. `"args!": {"x": 1}` on both sides). Via `_drop_nan_metrics` (one NaN empties the whole list), a single such sample silently wiped `args_iou` for the entire T3 undefended-vs-defended comparison — and the warning ("all values were NaN — check parser") misdirects.
+- **Why it hid:** the existing test `test_internvl3_tool_sequence_fallback_match` feeds exactly this real-args shape but only asserts `tool_name_acc`, never `args_iou`.
+- **Fix:** re-couple the NaN decision to the *merged* `record_for_iou` calls actually scored by `_args_iou_record`; NaN only when every recovered call has empty args (true name-only fallback). Real recovered args now preserve a genuine 1.0.
+- **Tests added (2, in `tests/test_align_per_sample_contract.py`):**
+  - `test_internvl3_fallback_real_args_keep_perfect_iou` — real matching args → `args_iou == [1.0]` (was `[]` pre-fix; RED→GREEN).
+  - `test_internvl3_fallback_name_only_nans_iou` — empty recovered args → metric correctly dropped to `[]` (guards the discriminator).
+- **Verification:** full suite `375 passed, 2 failed`; the 2 failures are the unchanged pre-existing ablation-config drift (below).
+
+### Confirmed correct (no change)
+
+- **ε-rescaling in `inner_pgd.py`** (`norm_epsilon = config.epsilon / pixel_std`): `pixel_std` is a scalar (`max` of per-channel σ on every VLM wrapper), so `float(...)` is type-safe; the attacks-repo runner (`runner/attacks.py:251-254`) applies the byte-identical scalar rescaling, so train and eval share one adversary definition. The `/pixel_std` convention is deliberate and project-wide — **must not** be changed unilaterally or train desyncs from the eval harness.
+- **`__target_mask` forward-kwarg:** consumed by `TokenTargetLoss.__call__` (`attacks/loss.py:102`); leaks into the model `forward` where it is absorbed by `**kwargs` (no crash). Inert at the model layer, functional at the loss layer.
+- **robust_eval `n_max` denominator, dedup keep-last, `raw_decode` fallback, `_sanitize`, `_pair_key` NaN-ε guard, `load_records` skip counter:** all reviewed, correct.
+- **T2 (`_read_metrics` prefer-`metrics`-subdict; `run_t2` missing-metric→NaN→fail):** reviewed and correct. The NaN-fail branch (`ok = (not isnan(drop)) and drop <= tol`) fixes the pre-existing "missing metric treated as 0.0 → silently passes when ceiling < tolerance" hole (obs 9262). **Coverage gap closed:** the existing `..._evaluator_returning_none_treated_as_zero` test uses a 0.90 ceiling, which fails under *both* old and new behaviour, so it did not pin the fix. Added `test_run_t2_missing_metric_fails_even_below_tolerance` (ceiling 0.02 < 3pp tol) — passes pre-2.6.x-fix would have been a silent PASS, now asserts FAIL + NaN current/drop.
+- **T3 (`_wilcoxon_signed_rank` length guard + `strict=True`; `_compute_t3_verdict` explicit NaN-traj branch):** reviewed and correct. The length guard raises instead of silently truncating mismatched paired arrays; equal length is an upstream invariant (`align_per_sample` shared-keys + `_drop_nan_metrics_paired`), so the guard is a fail-loud assert. The explicit `isnan(traj_delta)` branch is behaviour-equivalent to the prior `isnan or <` short-circuit, with a clearer note. (B05's two-sided-Wilcoxon direction issue is untouched — deferred below.)
+
+### Deferred — require user sign-off (NOT fixed)
+
+- **B05 — T3 two-sided Wilcoxon lets significant *degradation* pass** for `tool_name_acc` / `args_iou` / `answer_em` (only `traj_edit_distance` has a directional check). Changing it alters a *published-results* gate semantic. Decision needed: one-sided test, or post-hoc directional gate after BH-FDR.
+- **Ablation-config drift (2 failing tests):** `defenses_eps_reverse.yaml` (eps order not strict reverse) and `loss_oaat.yaml` (`defense` unchanged from undefended `oaat`). These are published ablation YAMLs; whether the test or the config is authoritative is a domain call. Left exactly as-is.

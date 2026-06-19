@@ -130,6 +130,7 @@ def _load_family_dispatch() -> dict[str, Any]:
         VLMFamily.LLAVA_NEXT.value: assemble_llava_next,
         VLMFamily.LLAVA_ONEVISION.value: assemble_llava_onevision,
         VLMFamily.INTERNVL2.value: assemble_internvl,
+        VLMFamily.INTERNVL3.value: assemble_internvl,
     }
 
 

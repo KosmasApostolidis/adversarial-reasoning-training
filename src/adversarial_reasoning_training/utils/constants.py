@@ -56,6 +56,7 @@ class VLMFamily(str, Enum):
     LLAVA_NEXT = "llava_next"
     LLAVA_ONEVISION = "llava_onevision"
     INTERNVL2 = "internvl2"
+    INTERNVL3 = "internvl3"
 
 
 __all__ = [
