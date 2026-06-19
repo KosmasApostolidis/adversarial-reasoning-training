@@ -31,6 +31,12 @@ def seed_everything(
         claims in T1/T3 reports). Set ``True`` for smoke runs that
         accept best-effort determinism.
     """
+    # PYTHONHASHSEED is read-only at interpreter startup; setting it here has
+    # no effect on the current process's hash randomization.  The assignment
+    # is kept because DataLoader worker subprocesses (and any other child
+    # process started after this call) inherit os.environ and will therefore
+    # start with a deterministic hash seed.  For parent-process hash
+    # determinism, set PYTHONHASHSEED in the launcher script before Python.
     os.environ["PYTHONHASHSEED"] = str(seed)
     # cuBLAS needs an explicit workspace-config hint to keep matmul
     # outputs deterministic across kernel selection. Without it,

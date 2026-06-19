@@ -13,6 +13,7 @@ def test_vlm_family_values_match_canonical_dispatch_keys() -> None:
     assert constants.VLMFamily.QWEN_VL.value == "qwen_vl"
     assert constants.VLMFamily.LLAVA_NEXT.value == "llava_next"
     assert constants.VLMFamily.INTERNVL2.value == "internvl2"
+    assert constants.VLMFamily.INTERNVL3.value == "internvl3"
 
 
 def test_vlm_family_is_str_enum_for_backwards_compatibility() -> None:
@@ -27,6 +28,7 @@ def test_vlm_family_membership_check_supports_raw_strings() -> None:
     assert "qwen_vl" in valid
     assert "llava_next" in valid
     assert "internvl2" in valid
+    assert "internvl3" in valid
     assert "qwen" not in valid
 
 

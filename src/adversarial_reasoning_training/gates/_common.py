@@ -125,7 +125,7 @@ def get_processor(vlm: Any) -> Any:
     expose an ``AutoProcessor`` (preferred) and fall back to the bare
     tokenizer when one was not attached.
     """
-    if vlm.family == VLMFamily.INTERNVL2:
+    if vlm.family in (VLMFamily.INTERNVL2, VLMFamily.INTERNVL3):
         return vlm
     processor = getattr(vlm, "processor", None) or vlm.tokenizer
     if processor is None:
