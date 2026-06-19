@@ -1,0 +1,8 @@
+# Qwen3-VL-8B training override.
+# Extends base training.yaml; picked up automatically by run_pipeline.sh for qwen3.
+# Currently matches the base — kept as a hook for model-specific tuning
+# (e.g. different LR schedule, grad_accum, or epochs for Qwen3 vs InternVL3).
+_extends: training.yaml
+
+epochs: 64
+defense: oaat

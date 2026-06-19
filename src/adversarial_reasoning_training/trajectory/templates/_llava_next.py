@@ -90,11 +90,15 @@ def _count_llava_image_tokens(
         count = sum(1 for t in ids if t == image_token_id)
         if count >= 1:
             return count
-    except (KeyError, IndexError, RuntimeError, ValueError, AttributeError, TypeError):
-        logger.debug(
-            "LLaVA-NeXT processor did not pre-expand image placeholder; "
-            "falling back to num_image_tokens=1.",
-            exc_info=True,
+    except (KeyError, IndexError) as exc:
+        # Processor returned an unexpected structure or the image token
+        # wasn't found in the tokenizer — the assembler will misalign
+        # input_ids, so surface this loudly.
+        logger.warning(
+            "LLaVA-NeXT processor did not pre-expand image placeholder "
+            "(%s: %s); falling back to num_image_tokens=1 — training "
+            "data may be misaligned.",
+            type(exc).__name__, exc,
         )
     return 1
 

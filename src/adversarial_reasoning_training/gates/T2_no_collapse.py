@@ -153,9 +153,8 @@ def _build_t2_parser() -> argparse.ArgumentParser:
                         help="cap dev_ds size; falls back to data.yaml n_dev")
     parser.add_argument(
         "--metrics", type=str, nargs="+",
-        default=["tool_name_acc", "answer_em"],
-        help="subset of T1 metrics to gate; args_iou skipped by default since "
-             "the teacher-forced proxy does not emit it",
+        default=["tool_name_acc", "args_iou", "answer_em"],
+        help="subset of T1 metrics to gate",
     )
     return parser
 

@@ -72,9 +72,12 @@ def test_build_trainer_config_defaults_when_pgd_missing(tmp_path: Path) -> None:
     assert cfg.eps_schedule is None
     assert cfg.default_epsilon == pytest.approx(EPS_4_255)
     assert cfg.alpha_ratio == pytest.approx(DEFAULT_PGD_ALPHA_RATIO)
-    assert cfg.pgd_steps == 7
-    # final_save_include_optimizer defaults to True
-    assert cfg.final_save_include_optimizer is True
+    assert cfg.pgd_steps == 20  # match canonical defenses.yaml
+    # final_save_include_optimizer defaults to False (weights-only save)
+    assert cfg.final_save_include_optimizer is False
+    assert cfg.pgd_attack_mode == "pgd"
+    assert cfg.pgd_momentum == 0.75
+    assert cfg.pgd_rho == 0.75
 
 
 @pytest.mark.unit

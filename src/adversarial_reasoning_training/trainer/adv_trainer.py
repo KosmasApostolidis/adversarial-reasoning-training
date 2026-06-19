@@ -53,8 +53,11 @@ class TrainerConfig:
     eps_schedule: list[dict[str, Any]] | None = None
     default_epsilon: float = EPS_4_255
     alpha_ratio: float = DEFAULT_PGD_ALPHA_RATIO
-    pgd_steps: int = 7
+    pgd_steps: int = 20  # match canonical configs/defenses.yaml
     pgd_random_restarts: int = 1
+    pgd_attack_mode: str = "pgd"  # pgd | apgd
+    pgd_momentum: float = 0.75
+    pgd_rho: float = 0.75
     # Seed for the train DataLoader RNG (controls shuffle order). Threaded
     # from ``--seed`` so a re-run with the same seed observes identical
     # mini-batch ordering. Without this, even a fully seeded torch / numpy
@@ -62,7 +65,7 @@ class TrainerConfig:
     # falls back to a fresh entropy source.
     loader_seed: int = 0
     run_dir: Path = Path("runs/default")
-    final_save_include_optimizer: bool = True
+    final_save_include_optimizer: bool = False  # match canonical training.yaml: weights-only save
 
 
 class AdvTrainer:
@@ -115,7 +118,7 @@ class AdvTrainer:
         )
         # Surface malformed eps_schedule entries before any training starts —
         # a typo would otherwise crash mid-epoch and lose progress.
-        validate_eps_schedule(self.config.eps_schedule)
+        validate_eps_schedule(self.config.eps_schedule, n_epochs=self.config.epochs)
 
         # Per-fit mutable state. ``accum_count`` tracks valid (non-NaN)
         # micro-batches in the current grad-accum window; partial tails
@@ -174,12 +177,10 @@ class AdvTrainer:
             alpha_ratio=self.config.alpha_ratio,
             steps=self.config.pgd_steps,
             random_restarts=self.config.pgd_random_restarts,
+            attack_mode=self.config.pgd_attack_mode,
+            momentum=self.config.pgd_momentum,
+            rho=self.config.pgd_rho,
         )
-        # Cast pixel_values to the model's parameter dtype before the PGD
-        # craft. The Qwen/LLaVA wrappers cast internally, but InternVL2/3
-        # do not — a float32 pixel tensor against a bf16 model raises a
-        # dtype mismatch inside the attack's forward. Casting here makes
-        # the inner attack dtype-robust across all VLM families.
         pixel_values = batch.forward_kwargs["pixel_values"].to(
             self.device, dtype=next(self.model.parameters()).dtype
         )
