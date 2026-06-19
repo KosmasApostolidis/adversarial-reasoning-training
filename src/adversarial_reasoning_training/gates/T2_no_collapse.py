@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -56,12 +57,15 @@ def _read_metrics(path: Path, metric_keys: tuple[str, ...]) -> dict[str, float]:
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     flat: dict[str, float] = {}
-    source = payload.get("metrics", payload)
+    metrics_sub = payload.get("metrics", {})
     for key in metric_keys:
-        if key in payload:
+        # Prefer the ``metrics`` sub-dict when present so a same-named
+        # top-level key (e.g. a threshold echo) cannot shadow the real
+        # metric value.
+        if isinstance(metrics_sub, dict) and key in metrics_sub:
+            flat[key] = float(metrics_sub[key])
+        elif key in payload:
             flat[key] = float(payload[key])
-        elif key in source:
-            flat[key] = float(source[key])
     return flat
 
 
@@ -92,18 +96,23 @@ def run_t2(
         if key not in current:
             notes.append(
                 f"metric {key} missing from evaluator output; "
-                f"treating as 0.0 (ceiling={ceil:.3f})"
+                f"treating as NaN (ceiling={ceil:.3f}) — this likely means "
+                f"the evaluator crashed or returned an incomplete result"
             )
-        current_value = float(current.get(key, 0.0))
+            current_value = float("nan")
+        else:
+            current_value = float(current[key])
         drop = ceil - current_value
+        # A NaN drop (missing metric) must fail the gate, not silently pass.
+        ok = (not math.isnan(drop)) and drop <= tol
         per_metric[key] = {
             "ceiling": ceil,
             "current": current_value,
             "drop": drop,
             "tolerance": tol,
-            "ok": drop <= tol,
+            "ok": ok,
         }
-        if drop > tol:
+        if not ok:
             passed = False
             notes.append(
                 f"{key}: drop {drop * 100:.1f} pp exceeds tolerance {thresholds.tolerance_pp:.1f} pp"
@@ -138,6 +147,7 @@ def _build_t2_parser() -> argparse.ArgumentParser:
         default=Path("../adversarial-reasoning-attacks/configs/models.yaml"),
     )
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--tolerance-pp", type=float, default=3.0)
     parser.add_argument("--max-eval-samples", type=int, default=None,
                         help="cap dev_ds size; falls back to data.yaml n_dev")
@@ -193,9 +203,11 @@ def _main() -> int:
     """
     import torch
 
+    from ..utils.seed import seed_everything
     from .T1_clean import make_teacher_forced_evaluator
 
     args = _build_t2_parser().parse_args()
+    seed_everything(args.seed)
 
     data_cfg = load_gate_yaml(args.data)
     gold_cfg = load_gate_yaml(args.gold)

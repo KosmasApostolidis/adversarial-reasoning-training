@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -37,6 +38,8 @@ from ._common import (
     load_gate_yaml,
     write_gate_result,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -298,6 +301,7 @@ def _build_t0_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--epsilon", type=float, default=EPS_4_255)
     parser.add_argument("--pgd-steps", type=int, default=3)
+    parser.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -335,8 +339,11 @@ def _main() -> int:
     """
     from adversarial_reasoning.models.loader import load_hf_vlm  # type: ignore
 
+    from ..utils.seed import seed_everything
+
     parser = _build_t0_parser()
     args = parser.parse_args()
+    seed_everything(args.seed)
 
     defense_cfg = load_gate_yaml(args.defenses, allow_empty=False)
     data_cfg = load_gate_yaml(args.data, allow_empty=False)

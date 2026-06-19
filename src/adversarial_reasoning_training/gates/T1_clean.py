@@ -408,7 +408,10 @@ def _build_t1_optimization(
 ) -> tuple[torch.optim.Optimizer, torch.optim.lr_scheduler._LRScheduler | None]:
     """Build optimizer + LR scheduler from the training config."""
     from ..trainer.optim import (
-        OptimConfig, ScheduleConfig, build_optimizer, build_scheduler,
+        OptimConfig,
+        ScheduleConfig,
+        build_optimizer,
+        build_scheduler,
     )
 
     lr = train_cfg.get("lr", {})

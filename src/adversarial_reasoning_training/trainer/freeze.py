@@ -65,10 +65,19 @@ def param_groups_by_role(
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if _matches(name, _VIT_PATTERNS):
-            groups["vit"].append(p)
-        elif _matches(name, _PROJECTOR_PATTERNS):
+        # Test projector patterns BEFORE vit: Qwen2.5/3-VL names its
+        # multimodal projector ``visual.merger.*``, which matches both the
+        # projector pattern (``merger``) and the vit pattern (``visual``).
+        # vit-first would mis-bucket the merger into the vit group — training
+        # it at lr_vit (10x off) and leaving the projector group empty, which
+        # also blanks the T0 gate's projector grad-norm signal. Projector
+        # patterns are the more specific match, so they win. Disjoint for
+        # LLaVA (multi_modal_projector / vision_tower) and InternVL, so this
+        # ordering is a no-op there.
+        if _matches(name, _PROJECTOR_PATTERNS):
             groups["projector"].append(p)
+        elif _matches(name, _VIT_PATTERNS):
+            groups["vit"].append(p)
         else:
             groups["lm"].append(p)
     pg: list[dict] = []
